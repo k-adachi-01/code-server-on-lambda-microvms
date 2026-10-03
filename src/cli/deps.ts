@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { validateConfig } from "../core/config.js";
 import type { RetryPolicy } from "../core/retry.js";
 import { SdkMicrovms } from "../shell/aws-adapter.js";
+import { FileFakeMicrovms } from "../shell/fake-backend.js";
 import type { InterpreterDeps } from "../shell/interpreter.js";
 import { Redactor, RedactingLogger } from "../shell/redact.js";
 import { StateStore } from "../shell/state-store.js";
@@ -44,10 +45,14 @@ export function buildDeps(flags: CliFlags, baseDir: string = process.cwd()): Int
   const { region, policy } = resolveRegionAndPolicy(raw);
   const redactor = new Redactor();
   const logger = new RedactingLogger(redactor);
-  const port = new SdkMicrovms(region, policy);
+  // CSMVM_FAKE_BACKEND enables a file-backed, offline fake adapter for local
+  // end-to-end runs with no AWS account or network (dev/test only). In that
+  // mode the readiness probe is also stubbed to succeed.
+  const useFake = process.env["CSMVM_FAKE_BACKEND"] !== undefined;
+  const port = useFake ? new FileFakeMicrovms(baseDir) : new SdkMicrovms(region, policy);
   const store = new StateStore(baseDir);
 
-  return {
+  const base: InterpreterDeps = {
     config: raw,
     port,
     store,
@@ -60,4 +65,8 @@ export function buildDeps(flags: CliFlags, baseDir: string = process.cwd()): Int
     isTTY: Boolean(process.stdin.isTTY),
     assumeYes: flags.assumeYes,
   };
+  if (useFake) {
+    base.fetchImpl = (async () => new Response("ok", { status: 200 })) as unknown as typeof fetch;
+  }
+  return base;
 }
