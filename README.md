@@ -14,6 +14,26 @@ infrastructure (the MicroVM image build inputs and least-privilege IAM).
 > It was built with [Kiro](https://kiro.dev) — requirements, design, implementation plan, and
 > code were produced through Kiro's spec-driven workflow.
 
+## Kiro University Challenge — how each lesson was used
+
+Each of the seven lessons maps to concrete, inspectable files in this repository. The paths
+below are where a reviewer can see the lesson applied.
+
+| Lesson | Where in this repo | How it was used |
+|---|---|---|
+| **1. Spec-driven development** | `.kiro/specs/lambda-microvm-code-server/{requirements,design,tasks}.md` | The whole project started as a spec: EARS requirements, a technical design, and a numbered implementation plan. The code under `src/` is built against that plan — e.g. the pure-core modules trace back to design "Pure helpers" and tasks 3/7. |
+| **2. Steering** | `.kiro/steering/tech.md` | Project-wide conventions that bind every agent: Nix + pnpm + Vite+ toolchain, the `src/core/**` import boundary, PBT conventions, PoC-Sandbox AWS safety, and public-repo hygiene. |
+| **3. Hooks** | `.kiro/hooks/*.json` | Four `PostFileSave` hooks as early-detection aids: repo-hygiene scan, Oxfmt format check, the core-import-boundary test on `src/core/**` saves, and a spec-tasks-sync reminder. They assist; the pre-commit hook and CI remain the authoritative guards. |
+| **4. Property-based testing** | `src/core/{status-map,retry,config}.ts` + `test/core/*.property.test.ts` | fast-check property tests (`numRuns >= 100`) for Property 4 (status mapping is total), 17 (retry delay bounds), and 16 (config bounds). Property 4 caught a real bug — a plain-object status lookup leaked `Object.prototype.valueOf`. |
+| **5. Powers** | `.kiro/powers/lambda-microvms/` | A custom Power (Agent Plugins format: `plugin.json`, `mcp.json`, `skills/`, `dev.kiro/steering/`) packaging repo-specific MicroVM knowledge together with the AWS MCP server. |
+| **6. MCP** | `.kiro/powers/lambda-microvms/mcp.json` | The Agent Toolkit for AWS **AWS MCP Server** (`uvx mcp-proxy-for-aws-cli`, region `ap-northeast-1`), giving the agent current AWS docs, the on-demand Lambda MicroVMs skill, and authenticated AWS access — a service too new to rely on model training data for. |
+| **7. Custom agents** | `.kiro/agents/{aws-operator,architecture-reviewer,experiment-runner}.md` + `.kiro/agents/README.md` | Three agents with deliberately disjoint capabilities: an AWS privilege-elevation profile, a read-only independent reviewer, and a Phase 0 experiment runner. See `.kiro/agents/README.md` for why each is a custom agent rather than steering or a hook. |
+| **Bonus — build your own Power** | `.kiro/powers/lambda-microvms/` | The Lesson 5 Power is an original, self-authored Power shared in this public repo. |
+
+Responsibility split used throughout: **steering** = project-wide principles, **hooks / lint /
+hygiene / CI** = enforcing repository invariants, **custom agents** = per-workflow capability and
+context, **IAM** = the final security boundary for AWS.
+
 ## Scope
 
 MVP: one user, one logical session, at most one active MicroVM.
@@ -135,7 +155,7 @@ src/cli/     Command entry points and the effect interpreter.
 image/        MicroVM image: Dockerfile, entrypoint, and the lifecycle hook handler.
 infra/        CDK app: image build inputs and least-privilege IAM.
 docs/         ENV checklist and Phase 0 findings.
-.kiro/        Spec (requirements, design, tasks) and steering.
+.kiro/        Spec, steering, hooks, the lambda-microvms Power, and custom agents.
 ```
 
 The authoritative documents, all under `.kiro/`:
