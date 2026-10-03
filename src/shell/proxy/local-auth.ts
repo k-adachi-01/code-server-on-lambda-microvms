@@ -57,19 +57,24 @@ export class LocalAuth {
   readonly loginUrl: string;
 
   constructor(
-    private readonly listenPort: number,
+    private readonly listenPort: number | (() => number),
     private readonly enabled: boolean,
   ) {
     this.secret = enabled ? token256() : null;
     this.cookieValue = token256();
-    this.loginUrl = `http://127.0.0.1:${listenPort}${LOGIN_PATH}?k=${this.secret ?? ""}`;
+    this.loginUrl = `http://127.0.0.1:${this.port()}${LOGIN_PATH}?k=${this.secret ?? ""}`;
+  }
+
+  /** The current listen port (may be resolved lazily when bound to port 0). */
+  private port(): number {
+    return typeof this.listenPort === "function" ? this.listenPort() : this.listenPort;
   }
 
   /** Validate the Host header against the loopback host:port forms. */
   hostOk(host: string | undefined): boolean {
     if (!this.enabled) return true;
     if (host === undefined) return false;
-    return host === `127.0.0.1:${this.listenPort}` || host === `localhost:${this.listenPort}`;
+    return host === `127.0.0.1:${this.port()}` || host === `localhost:${this.port()}`;
   }
 
   /** Validate a WebSocket Origin header (must be the loopback proxy origin). */
@@ -77,8 +82,7 @@ export class LocalAuth {
     if (!this.enabled) return true;
     if (origin === undefined) return false;
     return (
-      origin === `http://127.0.0.1:${this.listenPort}` ||
-      origin === `http://localhost:${this.listenPort}`
+      origin === `http://127.0.0.1:${this.port()}` || origin === `http://localhost:${this.port()}`
     );
   }
 

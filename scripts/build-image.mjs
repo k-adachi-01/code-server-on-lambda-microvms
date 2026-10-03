@@ -17,6 +17,7 @@ import {
   UpdateMicrovmImageCommand,
   GetMicrovmImageBuildCommand,
   ListMicrovmImageBuildsCommand,
+  ListMicrovmImageVersionsCommand,
 } from "@aws-sdk/client-lambda-microvms";
 
 const region = process.env["CSMVM_REGION"] ?? "ap-northeast-1";
@@ -67,33 +68,60 @@ try {
 } catch (e) {
   if (e.name === "ValidationException" && /already exists/.test(e.message ?? "")) {
     console.log("image exists; creating a new version via UpdateMicrovmImage");
-    await client.send(new UpdateMicrovmImageCommand({ imageIdentifier: imageArn, ...buildInputs }));
-    imageVersion = undefined; // discovered below from the newest build
+    const updated = await client.send(
+      new UpdateMicrovmImageCommand({ imageIdentifier: imageArn, ...buildInputs }),
+    );
+    // Trust the version the service just created; only fall back to discovery
+    // if the response omits it.
+    imageVersion = updated.imageVersion;
   } else {
     throw e;
   }
 }
 
-// Find the newest build (highest version) and poll it.
-async function newestBuild() {
-  // Try the known version first, else list across versions by probing.
-  const versions = imageVersion ? [imageVersion] : ["3.0", "2.0", "1.0"];
-  for (const v of versions) {
-    try {
-      const builds = await client.send(
-        new ListMicrovmImageBuildsCommand({ imageIdentifier: imageArn, imageVersion: v }),
-      );
-      const items = builds.items ?? [];
-      if (items.length > 0) {
-        // newest createdAt
-        items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        return { imageVersion: v, buildId: items[0].buildId };
-      }
-    } catch {
-      /* version may not exist; try next */
-    }
+/** Compare two version strings like "4.0"/"10.0" numerically, descending. */
+function compareVersionsDesc(a, b) {
+  const pa = String(a).split(".").map(Number);
+  const pb = String(b).split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pb[i] ?? 0) - (pa[i] ?? 0);
+    if (d !== 0) return d;
   }
-  return null;
+  return 0;
+}
+
+/** Discover the newest image version via the API (no hardcoded version list). */
+async function discoverNewestVersion() {
+  const versions = [];
+  let nextToken;
+  do {
+    const page = await client.send(
+      new ListMicrovmImageVersionsCommand({ imageIdentifier: imageArn, nextToken }),
+    );
+    for (const v of page.items ?? []) {
+      if (v.imageVersion !== undefined) versions.push(v.imageVersion);
+    }
+    nextToken = page.nextToken;
+  } while (nextToken !== undefined && nextToken !== "");
+  if (versions.length === 0) return undefined;
+  versions.sort(compareVersionsDesc);
+  return versions[0];
+}
+
+// Find the newest build for the target version and poll it.
+async function newestBuild() {
+  // Prefer the version the create/update call returned; otherwise ask the API
+  // for the newest version rather than guessing from a fixed list.
+  const version = imageVersion ?? (await discoverNewestVersion());
+  if (version === undefined) return null;
+  const builds = await client.send(
+    new ListMicrovmImageBuildsCommand({ imageIdentifier: imageArn, imageVersion: version }),
+  );
+  const items = builds.items ?? [];
+  if (items.length === 0) return null;
+  // newest createdAt
+  items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return { imageVersion: version, buildId: items[0].buildId };
 }
 
 // Give the service a moment to register the new build.
