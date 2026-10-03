@@ -49,49 +49,63 @@ export class CsmvmStack extends Stack {
     });
     asset.grantRead(buildRole);
 
-    // 3. Image. The managed base image ARN is region-derived; the exact value is
-    //    discovered via ListManagedMicrovmImages and confirmed in Phase 0 S1.
+    // 3. Image. NOTE (Phase 0 S1): building the image through CloudFormation
+    //    fails — AWS::Lambda::MicrovmImage stabilization times out at ~60s,
+    //    far shorter than a real Dockerfile build + snapshot, so CloudFormation
+    //    rolls the image back. The image is therefore built via the direct
+    //    create-microvm-image API with polling (scripts/build-image.mjs), not
+    //    here. The CloudFormation image resource is kept behind an opt-in
+    //    context flag only for reference/experimentation.
+    //    The managed base image ARN is region-derived; confirmed in S1 as
+    //    arn:aws:lambda:ap-northeast-1:aws:microvm-image:al2023-1.
     const baseImageArn = `arn:aws:lambda:${region}:aws:microvm-image:al2023-1`;
-    const image = new lambda.CfnMicrovmImage(this, "Image", {
-      name: "csmvm-code-server",
-      description: "code-server on Lambda MicroVMs",
-      baseImageArn,
-      baseImageVersion: "1",
-      buildRoleArn: buildRole.roleArn,
-      codeArtifact: { uri: asset.s3ObjectUrl },
-      resources: [{ minimumMemoryInMiB: 2048 }],
-      cpuConfigurations: [{ architecture: "ARM_64" }],
-      additionalOsCapabilities: [],
-      egressNetworkConnectors: [],
-      environmentVariables: [],
-      logging: { disabled: true },
-      // Hook enablement + timeouts (seconds). The hook command fields are
-      // ENABLED/DISABLED flags; the in-VM handler on port 9000 serves the
-      // concrete paths (/run, /ready, /validate, /resume, /suspend,
-      // /terminate). Exact timings confirmed in Phase 0 S1 (R13.2-R13.4).
-      hooks: {
-        port: 9000,
-        microvmHooks: {
-          run: "ENABLED",
-          runTimeoutInSeconds: 10,
-          resume: "ENABLED",
-          resumeTimeoutInSeconds: 10,
-          suspend: "ENABLED",
-          suspendTimeoutInSeconds: 10,
-          terminate: "ENABLED",
-          terminateTimeoutInSeconds: 10,
+    if (this.node.tryGetContext("buildImageInCfn") === "true") {
+      const image = new lambda.CfnMicrovmImage(this, "Image", {
+        name: "csmvm-code-server",
+        description: "code-server on Lambda MicroVMs",
+        baseImageArn,
+        baseImageVersion: "1",
+        buildRoleArn: buildRole.roleArn,
+        codeArtifact: { uri: asset.s3ObjectUrl },
+        resources: [{ minimumMemoryInMiB: 2048 }],
+        cpuConfigurations: [{ architecture: "ARM_64" }],
+        additionalOsCapabilities: [],
+        egressNetworkConnectors: [],
+        environmentVariables: [],
+        logging: { disabled: true },
+        hooks: {
+          port: 9000,
+          microvmHooks: {
+            run: "ENABLED",
+            runTimeoutInSeconds: 10,
+            resume: "ENABLED",
+            resumeTimeoutInSeconds: 10,
+            suspend: "ENABLED",
+            suspendTimeoutInSeconds: 10,
+            terminate: "ENABLED",
+            terminateTimeoutInSeconds: 10,
+          },
+          microvmImageHooks: {
+            ready: "ENABLED",
+            readyTimeoutInSeconds: 120,
+            validate: "ENABLED",
+            validateTimeoutInSeconds: 120,
+          },
         },
-        microvmImageHooks: {
-          ready: "ENABLED",
-          readyTimeoutInSeconds: 120,
-          validate: "ENABLED",
-          validateTimeoutInSeconds: 120,
-        },
-      },
-    });
-    image.node.addDependency(buildRole);
+      });
+      image.node.addDependency(buildRole);
+      new CfnOutput(this, "CfnImageRef", { value: image.ref });
+    }
 
-    const imageArn = `arn:aws:lambda:${region}:${account}:microvm-image:${image.ref}`;
+    // The image ARN name the operator policy and the build script use. The
+    // build script creates the image with this exact name.
+    const imageName = "csmvm-code-server";
+    const imageArn = `arn:aws:lambda:${region}:${account}:microvm-image:${imageName}`;
+
+    // Expose the inputs the API-driven build script needs.
+    new CfnOutput(this, "BuildRoleArn", { value: buildRole.roleArn });
+    new CfnOutput(this, "CodeArtifactUri", { value: asset.s3ObjectUrl });
+    new CfnOutput(this, "BaseImageArn", { value: baseImageArn });
 
     // 4. Operator_Policy: the seven lambda:*Microvm* instance actions scoped to
     //    the Image ARN; ListMicrovms needs Resource:* (no resource-level

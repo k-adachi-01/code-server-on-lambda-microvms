@@ -15,8 +15,11 @@ const entrypoint = readFileSync(
 );
 
 describe("MicroVM image Dockerfile", () => {
-  it("uses the verified AL2023 base container (A-12)", () => {
+  it("uses the verified AL2023 base container (A-12), single-stage", () => {
     expect(dockerfile).toContain("FROM public.ecr.aws/lambda/microvms:al2023-minimal");
+    // Single-stage: no external first-stage base image (Phase 0 S1 finding).
+    expect(dockerfile).not.toContain("node:22");
+    expect(dockerfile).not.toContain("COPY --from=");
   });
 
   it("pins code-server to an exact version (ARG) and verifies a SHA-256 (R13.6)", () => {

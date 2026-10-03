@@ -1,36 +1,26 @@
 # MicroVM image for code-server (R13.1, R13.5-R13.7, R5.4; A-12, A-14).
 #
-# Multi-stage:
-#   1. hooks   compile+bundle the lifecycle Hook_Handler to a single JS file.
-#   2. runtime AL2023 base, code-server pinned by exact version + SHA-256,
-#      non-root coder user, empty workspace. The entrypoint starts code-server
-#      at IMAGE BUILD TIME under tini so the running process is captured in the
-#      Firecracker snapshot (A-14) and every MicroVM resumes from it.
+# SINGLE-STAGE from the AWS-managed AL2023 base. Phase 0 S1 finding: the MicroVM
+# image build service failed on a multi-stage build whose first stage used an
+# external (docker.io) base image. The build runs FROM the managed base only, so
+# the hook handler is bundled LOCALLY (image/hooks -> dist/handler.mjs) and
+# copied into the context before upload; no npm/pnpm runs during the image build.
 #
-# The image holds NO secret and NO per-user build-time value (R13.5, R13.7):
-# no code-server password, session secret, or keys are generated here.
+# The entrypoint starts code-server at IMAGE BUILD TIME (as the container init;
+# no tini — see below) so the running
+# process is captured in the Firecracker snapshot (A-14) and every MicroVM
+# resumes from it. The image holds NO secret and NO per-user build-time value
+# (R13.5, R13.7): no code-server password, session secret, or keys.
 
-# ---- stage 1: bundle the hook handler ----
-FROM public.ecr.aws/docker/library/node:22-bookworm-slim AS hooks
-WORKDIR /build
-COPY image/hooks/package.json ./package.json
-# The bundle has no runtime node_modules; install only the dev bundler.
-RUN corepack enable && corepack prepare pnpm@11.17.0 --activate && pnpm install --no-frozen-lockfile
-COPY image/hooks/src ./src
-RUN pnpm run build && test -f dist/handler.mjs
-
-# ---- stage 2: runtime ----
-FROM public.ecr.aws/lambda/microvms:al2023-minimal AS runtime
+FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
 # code-server pinned to an exact version with a verified SHA-256 (R13.6).
-# Bump both together; re-check the hook handler against the bundled Node when
-# code-server is upgraded.
 ARG CODE_SERVER_VERSION=4.96.4
 ARG CODE_SERVER_SHA256=8471a70ac790ce43c302c43451e45eb2cf000a927db5bb2c8a9899b72e32fff6
 
-# Runtime packages. curl is already present as curl-minimal in the AL2023
-# base image, so it is not reinstalled here (that caused a curl/curl-minimal
-# conflict). The base uses microdnf, which has a limited flag set.
+# Runtime packages. curl is already present as curl-minimal in the base; it is
+# not reinstalled (that caused a curl/curl-minimal conflict). The base uses
+# microdnf with a limited flag set.
 RUN dnf install -y git tar gzip shadow-utils nodejs && dnf clean all
 
 # Download and verify code-server, then install it.
@@ -46,19 +36,19 @@ RUN curl -fsSL -o /tmp/code-server.tar.gz \
 RUN useradd --create-home --uid 1000 coder \
  && mkdir -p /home/coder/workspace \
  && chown -R coder:coder /home/coder
-COPY --chown=coder:coder image/workspace-seed/ /home/coder/workspace/
+COPY --chown=coder:coder workspace-seed/ /home/coder/workspace/
 
-# The bundled hook handler (single file, no node_modules).
-COPY --from=hooks /build/dist/handler.mjs /opt/csmvm/hook-handler.mjs
+# The hook handler, pre-bundled locally to a single file (no node_modules).
+COPY hooks/dist/handler.mjs /opt/csmvm/hook-handler.mjs
 
-COPY image/entrypoint.sh /opt/csmvm/entrypoint.sh
+COPY entrypoint.sh /opt/csmvm/entrypoint.sh
 RUN chmod +x /opt/csmvm/entrypoint.sh
 
 USER coder
 WORKDIR /home/coder
 EXPOSE 8080 9000
 
-# tini is PID 1; the entrypoint starts the hook handler and code-server. This
-# runs during the image build so the snapshot captures code-server already
-# serving (A-14).
-ENTRYPOINT ["/usr/bin/tini", "--", "/opt/csmvm/entrypoint.sh"]
+# No tini in the AL2023 base (Phase 0 S1 finding — the A-12 "tini from base"
+# assumption was wrong). The entrypoint runs as the container init and execs
+# code-server as the foreground process.
+ENTRYPOINT ["/opt/csmvm/entrypoint.sh"]

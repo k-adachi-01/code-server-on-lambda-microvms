@@ -17,6 +17,8 @@ const ALLOWED_TYPES = new Set([
   "AWS::IAM::ManagedPolicy",
   "AWS::Lambda::MicrovmImage",
   "AWS::CDK::Metadata",
+  "Custom::CDKBucketDeployment",
+  "AWS::S3::BucketPolicy",
 ]);
 
 describe("CsmvmStack", () => {
@@ -28,19 +30,23 @@ describe("CsmvmStack", () => {
     }
   });
 
-  it("builds the MicroVM image with the 2 GB baseline and a build role", () => {
+  it("does NOT build the image in CloudFormation by default (Phase 0 S1: CFN stabilization times out)", () => {
     const t = synth();
+    expect(Object.keys(t.findResources("AWS::Lambda::MicrovmImage")).length).toBe(0);
+  });
+
+  it("builds the image in CloudFormation only when buildImageInCfn=true (reference path)", () => {
+    const app = new App({ context: { buildImageInCfn: "true" } });
+    const stack = new CsmvmStack(app, "CfnImgStack", ENV);
+    const t = Template.fromStack(stack);
     const image = Object.values(t.findResources("AWS::Lambda::MicrovmImage"))[0];
-    // CDK L1 renders these as PascalCase CloudFormation keys.
     const props = image?.Properties as {
       Name: string;
       Resources: { MinimumMemoryInMiB: number }[];
-      BuildRoleArn: unknown;
       BaseImageArn: string;
     };
     expect(props.Name).toBe("csmvm-code-server");
     expect(props.Resources[0]?.MinimumMemoryInMiB).toBe(2048);
-    expect(props.BuildRoleArn).toBeDefined();
     expect(props.BaseImageArn).toBe("arn:aws:lambda:ap-northeast-1:aws:microvm-image:al2023-1");
   });
 
@@ -131,9 +137,13 @@ describe("CsmvmStack", () => {
   });
 
   it("adds no sandbox lifecycle tags by default (PoC-agnostic committed code)", () => {
+    // With no AUTO_DELETE/EXPIRES_AT in the environment, the build role (always
+    // present) carries no sandbox lifecycle tags.
+    delete process.env["AUTO_DELETE"];
+    delete process.env["EXPIRES_AT"];
     const t = synth();
-    const image = Object.values(t.findResources("AWS::Lambda::MicrovmImage"))[0];
-    const tags = (image?.Properties?.Tags as { Key: string }[] | undefined) ?? [];
+    const role = Object.values(t.findResources("AWS::IAM::Role"))[0];
+    const tags = (role?.Properties?.Tags as { Key: string }[] | undefined) ?? [];
     expect(tags.some((tag) => tag.Key === "auto_delete")).toBe(false);
     expect(tags.some((tag) => tag.Key === "expires_at")).toBe(false);
   });

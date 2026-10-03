@@ -1,7 +1,9 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # MicroVM entrypoint (R5.4, R13.1, A-14). Starts the lifecycle Hook_Handler and
 # code-server. Runs during the image build so the running code-server process is
-# captured in the Firecracker snapshot and every MicroVM resumes from it.
+# captured in the Firecracker snapshot and every MicroVM resumes from it. Runs
+# as the container init (no tini in the AL2023 base — Phase 0 S1 finding); the
+# final `exec code-server` becomes the foreground/PID1 process.
 #
 # --auth none is used only because Phase 0 S1/S3 must confirm the endpoint
 # enforces JWE auth before this is relied upon; if S3 shows otherwise, switch to
