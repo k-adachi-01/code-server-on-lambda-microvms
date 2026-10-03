@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Spec tasks sync reminder",
+      "trigger": "PostFileSave",
+      "description": "When spec documents or implementation under src/ change, remind the agent to keep the spec tasks list in sync (check off completed tasks, flag newly-needed ones). Advisory only; does not modify files on its own.",
+      "matcher": "(\\.kiro/specs/lambda-microvm-code-server/(requirements|design)\\.md|src/.*\\.(ts|mts|cts|tsx)$)",
+      "action": {
+        "type": "agent",
+        "prompt": "A spec document or source file for the `lambda-microvm-code-server` spec just changed. Review `.kiro/specs/lambda-microvm-code-server/tasks.md` against the current state of `requirements.md`, `design.md`, and the code under `src/`. If any task is now complete, mark its checkbox done; if the change introduces work not yet captured, note the missing task. Only report what should change in tasks.md and why — do not edit requirements.md or design.md. Keep it brief."
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Repo hygiene on save",
+      "trigger": "PostFileSave",
+      "description": "Early detection of personal-environment values (AWS account ids, SSO URLs, local paths, profile names) on file save. Auxiliary aid; the pre-commit hook and CI remain the authoritative guards.",
+      "matcher": "\\.(ts|mts|tsx|js|mjs|cjs|json|md|yaml|yml|nix|toml|sh)$",
+      "action": {
+        "type": "command",
+        "command": "f=$(node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).filePath||'')}catch{}})\"); [ -n \"$f\" ] && node scripts/hygiene.mjs \"$f\" || true"
+      }
+    }
+  ]
+}

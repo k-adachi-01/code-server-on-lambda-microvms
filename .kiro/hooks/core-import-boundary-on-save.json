@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Core import boundary check on save",
+      "trigger": "PostFileSave",
+      "description": "Early guard for the core import boundary: when a file under src/core/ is saved, run the authoritative import-scan test (test/hygiene/core-imports.test.ts) so a forbidden AWS SDK / node:fs|net|http|https|process|child_process import is caught before commit. Auxiliary aid; pre-commit and CI remain authoritative.",
+      "matcher": "src/core/.*\\.(ts|mts|cts|tsx)$",
+      "action": {
+        "type": "command",
+        "command": "pnpm exec vp test --run test/hygiene/core-imports.test.ts"
+      }
+    }
+  ]
+}

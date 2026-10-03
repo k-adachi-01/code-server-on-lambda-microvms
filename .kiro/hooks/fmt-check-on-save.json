@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Format check on save",
+      "trigger": "PostFileSave",
+      "description": "Early format check (Oxfmt via Vite+) on the saved TS/JS file. Auxiliary aid; the pre-commit `vp staged` and CI `pnpm check` remain the authoritative guards. Does not rewrite files.",
+      "matcher": "\\.(ts|mts|cts|tsx|js|mjs|cjs|jsx)$",
+      "action": {
+        "type": "command",
+        "command": "f=$(node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).filePath||'')}catch{}})\"); [ -n \"$f\" ] && pnpm exec vp fmt --check \"$f\" || true"
+      }
+    }
+  ]
+}
