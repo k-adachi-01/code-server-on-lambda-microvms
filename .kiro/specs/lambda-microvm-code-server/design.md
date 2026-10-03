@@ -15,12 +15,12 @@ Facts about AWS behavior come from the requirements "Assumptions and Open Questi
 
 | ID | Resolution | Override |
 |---|---|---|
-| Q-1 | The Auth_Proxy requires a per-connect secret. `connect` prints a one-time login URL (`/__csmvm/login?k=<secret>`). The first use swaps the secret for an `HttpOnly; SameSite=Strict` session cookie and then invalidates it. The proxy also checks the `Host` and `Origin` headers. | `proxy.localAuth: false` brings back the plain localhost behavior. A warning is printed. |
-| Q-2 | Region and Image ARN come from `csmvm.config.json` (gitignored). The `config import` subcommand fills them from `infra/cdk-outputs.json` (`cdk deploy --outputs-file`). Phase 0 confirms which Region to use. | Edit the config file by hand. |
-| Q-3 | As decided in requirements: pass `ALL_INGRESS` and `INTERNET_EGRESS` explicitly, both configurable. | Config `networkConnectorArns`. |
+| Q-1 | Resolved (user-confirmed), enabled by default. The Auth_Proxy requires a per-connect secret. `connect` prints a one-time login URL (`/__csmvm/login?k=<secret>`). The first use swaps the secret for an `HttpOnly; SameSite=Strict` session cookie and then invalidates it. The proxy also checks the `Host` and `Origin` headers. | `proxy.localAuth: false` brings back the plain localhost behavior. A warning is printed. |
+| Q-2 | Resolved (user-confirmed): Region `us-east-1`. Region and Image ARN live in `csmvm.config.json` (gitignored). The `config import` subcommand fills them from `infra/cdk-outputs.json` (`cdk deploy --outputs-file`). | Edit the config file by hand. |
+| Q-3 | Resolved (user-confirmed): pass no network connectors by default and rely on the service defaults (outbound internet works by default). S2 checks whether the ingress connector (`ALL_INGRESS`) must be passed for the endpoint; if so, the default becomes the ingress connector only. | Optional config `networkConnectorArns` (passed exactly as configured). |
 | Q-4 | No Execution_Role. RunMicrovm is called without `executionRoleArn` unless Phase 0 shows it is required. | CDK context `withExecutionRole=true` adds the role and an `iam:PassRole` statement. The CLI reads `executionRoleArn` from config. |
 | Q-5 | The workspace starts empty. code-server opens `/home/coder/workspace`, an empty directory. | Add files under `image/workspace-seed/`. |
-| Q-6 | The Auth_Proxy runs only in the foreground of `connect`. `launch` and `resume` print the proxy URL and the `connect` hint. `launch --connect` hands off to connect. | — |
+| Q-6 | Resolved (user-confirmed): the Auth_Proxy runs only in the foreground of `connect`. `launch` and `resume` print the proxy URL and the `connect` hint. `launch` never starts the proxy. | — |
 
 ## Architecture
 
@@ -222,8 +222,11 @@ function validateConfig(raw: unknown): { ok: true; config: CliConfig } | { ok: f
 // R2.1, R2.5, R2.8, R2.9
 function buildRunParams(cfg: CliConfig, clientToken: string, sessionId: string): RunMicrovmParams;
 //  maximumDurationInSeconds = cfg.maximumDurationInSeconds
-//  idlePolicy = { autoResumeEnabled: false, maxIdleDurationSeconds: max(60, cfg.maximumDurationInSeconds), ...all other fields set }
-//  networkConnectors = [cfg.networkConnectorArns.ingress, cfg.networkConnectorArns.egress]
+//  idlePolicy = { autoResumeEnabled: false,
+//                 maxIdleDurationSeconds: max(60, cfg.maximumDurationInSeconds),
+//                 suspendedDurationSeconds: cfg.suspendedDurationSeconds }   // all three fields set (A-6, A-15)
+//  networkConnectors: omitted unless cfg.networkConnectorArns is set, then passed exactly (R2.8);
+//                     if S2 shows ALL_INGRESS is required, the default becomes [ingress only]
 //  runHookPayload = JSON.stringify({ sessionId })  -- asserted <= 4096 bytes, no secrets
 
 // R12.1, R12.2: full jitter
@@ -232,6 +235,8 @@ function retryDelayMs(attempt: number, p: { baseMs: number; capMs: number }, ran
 ```
 
 If Phase 0 finds an upper bound `B < 28800` on `maxIdleDurationSeconds` (A-6), `validateConfig` caps `maximumDurationInSeconds` at `B`. The requirements are amended accordingly (section 11).
+
+`suspendedDurationSeconds` defaults to the resolved `maximumDurationInSeconds`. Until S8 reports (A-15), `validateConfig` accepts an integer in `[1, 28800]`; this upper bound is unverified and is tightened if S8 finds a narrower range.
 
 ### AWS_Adapter (shell)
 
@@ -307,7 +312,7 @@ interface ProxyDeps {
 
 | Command | Notes |
 |---|---|
-| `launch [--yes] [--connect]` | The prompt shows the Image ARN, Region, and max duration (R10.1). Waits for RUNNING, then prints `http://127.0.0.1:<port>` and the `connect` hint. |
+| `launch [--yes]` | The prompt shows the Image ARN, Region, and max duration (R10.1). Waits for RUNNING, then prints `http://127.0.0.1:<port>` and the `connect` hint. |
 | `status` | Prints sessionId, microvmId, state, raw status, adopted, remaining duration if known, strays, and the snapshot-cost notice when SUSPENDED (R9.8, R11.3). Never mutates anything. |
 | `connect` | Requires RUNNING. Runs the Auth_Proxy in the foreground. |
 | `suspend`, `resume` | Wait for the target state. |
@@ -320,14 +325,15 @@ Exit codes: 0 for success, user cancel, or already terminated. 1 for AWS or runt
 
 ### Image (`image/`)
 
-- `Dockerfile`, multi-stage. The build stage compiles `image/hooks` (TypeScript). The runtime stage is a Linux base image whose support Phase 0 confirms (A-12). It installs code-server from the release tarball at an exact version, `ARG CODE_SERVER_VERSION=<x.y.z>`, and checks a pinned SHA-256 (R13.6). Runtime packages are git, curl, and tini. It runs as a non-root `coder` user, and the workspace directory is empty (Q-5).
-- `entrypoint.sh`: starts code-server under tini with `code-server --auth none --bind-addr 0.0.0.0:8080 --disable-telemetry /home/coder/workspace` (R5.4, R13.1). It also starts the Hook_Handler.
+- `Dockerfile`, multi-stage. The build stage compiles `image/hooks` (TypeScript). The runtime stage is `FROM public.ecr.aws/lambda/microvms:al2023-minimal` (verified base container, A-12); the Image is based on the base image ARN form `arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1`. It installs code-server from the release tarball at an exact version, `ARG CODE_SERVER_VERSION=<x.y.z>`, and checks a pinned SHA-256 (R13.6). Runtime packages are git, curl, and tini. It runs as a non-root `coder` user, and the workspace directory is empty (Q-5).
+- `entrypoint.sh`: starts code-server under tini with `code-server --auth none --bind-addr 0.0.0.0:8080 --disable-telemetry /home/coder/workspace` (R5.4, R13.1). It also starts the Hook_Handler. `--auth none` stays only because S3 (task 1.4) must confirm endpoint JWE enforcement before any image task.
+- Snapshot model (A-14): code-server is started during the Image build, so the running process is captured in the Firecracker snapshot and every MicroVM resumes from it. Anything generated at build time (random seeds, IDs, code-server internal state) is shared by all MicroVMs. Therefore the Image holds no secret and no per-user unique value generated at build time (R13.5, R13.7): no code-server password, no session secret, no keys. S1 verifies that code-server works after restore.
 - Hook_Handler (Node, about 100 lines):
-  - `run` polls `http://127.0.0.1:8080/healthz` and returns 200 when it gets a 2xx before an internal deadline, which defaults to the configured run hook timeout minus 2 s. Otherwise it returns 503 (R13.2).
+  - `run` does not start code-server. It only performs the health check: it polls `http://127.0.0.1:8080/healthz` and returns 200 when it gets a 2xx before an internal deadline, which defaults to the configured run hook timeout minus 2 s. Otherwise it returns 503 (R13.2). If S1 shows that some per-VM uniqueness must be restored (for example re-seeding a value code-server relies on), `run` does that before the health check; it never injects secrets.
   - `resume`, `suspend`, and `terminate` return 200 at once. They log the hook name and the runHookPayload `sessionId` (R13.3).
-  - `/ready` and `/validate` wait for the code-server health check, using the same logic with the longer deadline (R13.4).
+  - `/ready` and `/validate` wait for the build-time code-server process to pass the health check, using the same logic with the longer deadline (R13.4). The snapshot is taken with code-server running.
   - Which port and path prefix serve the hooks is part of the A-12 contract that Phase 0 confirms. If hooks must share port 8080, the Hook_Handler becomes the front process on 8080: it serves `/aws/lambda-microvms/*` itself and reverse-proxies everything else (including WebSocket) to code-server on 8081. R13.1 then refers to the external port.
-- No credentials: a test scans `image/` with gitleaks and greps for `AWS_ACCESS_KEY_ID`, `aws_secret`, and similar (R13.5).
+- No credentials or build-time secrets: a test scans `image/` with gitleaks and greps for `AWS_ACCESS_KEY_ID`, `aws_secret`, and similar, and checks that the Dockerfile and entrypoint set no `PASSWORD`/`HASHED_PASSWORD` and generate no secret at build time (R13.5, R13.7).
 
 ### Infrastructure (`infra/`, CDK, TypeScript)
 
@@ -342,7 +348,10 @@ class CodeServerMicrovmStack extends Stack {
   buildRole.addToPolicy(new iam.PolicyStatement({ actions: ["s3:GetObject"], resources: [ctx.bucket.arnForObjects(ctx.s3ObjectKey)] }));
   // + kms:Decrypt on the bootstrap key only if the asset bucket uses a CMK (Phase 0 / A-12)
   // 3. Image (L1). Property names follow the AWS::Lambda::MicrovmImage schema at implementation time.
-  const image = new lambda.CfnMicrovmImage(this, "Image", { /* name, build context S3 location, buildRoleArn, hook timeouts */ });
+  const image = new lambda.CfnMicrovmImage(this, "Image", {
+    /* name, base image arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1, build context S3 location,
+       buildRoleArn, hook timeouts, resources: { minimumMemoryInMiB: 2048 }  // 2 GB / 1 vCPU baseline, peaks up to 4x (A-12) */
+  });
   // 4. Operator policy (managed policy; the user attaches it to their own SSO role)
   // 5. Optional ExecutionRole + PassRole if context withExecutionRole=true (Q-4)
   // Outputs: ImageArn, Region, OperatorPolicyArn
@@ -378,9 +387,11 @@ Note on R9.7: the token is also kept in the C6/C7b case (TERMINATING with no ID)
 
 ```ts
 interface CliConfig {
-  region: string; imageArn: string; executionRoleArn?: string;
-  maximumDurationInSeconds: number;               // int 1..28800, default 14400
-  networkConnectorArns: { ingress: string; egress: string };
+  region: string;                                  // example/default "us-east-1" (Q-2)
+  imageArn: string; executionRoleArn?: string;
+  maximumDurationInSeconds: number;               // int 1..28800, default 7200
+  suspendedDurationSeconds: number;               // int 1..28800 (upper bound unverified, A-15), default = maximumDurationInSeconds
+  networkConnectorArns?: string[];                 // optional override; absent = pass none (R2.8, Q-3)
   codeServerPort: number;                          // default 8080
   proxy: { listenPort: number; localAuth: boolean };          // 8787, true
   token: { maxExpirationMinutes: number; refreshMarginSeconds: number }; // int 1..60 (default 15), 60
@@ -607,9 +618,9 @@ For any ListMicrovms result with the file absent: if exactly one entry is active
 
 ### Property 16: Config bounds and run parameters
 
-For any numeric value `d`, `validateConfig` accepts `maximumDurationInSeconds = d` exactly when `d` is an integer in `[1, 28800]`, and defaults it to 14400 when absent. For any `m`, it accepts `token.maxExpirationMinutes = m` exactly when `m` is an integer in `[1, 60]`. For any valid config, `buildRunParams` passes `maximumDurationInSeconds` unchanged and sets `maxIdleDurationSeconds ≥ max(60, d)` and `autoResumeEnabled = false`.
+For any numeric value `d`, `validateConfig` accepts `maximumDurationInSeconds = d` exactly when `d` is an integer in `[1, 28800]`, and defaults it to 7200 when absent. For any `s`, it accepts `suspendedDurationSeconds = s` exactly when `s` is an integer in `[1, 28800]` (bound pending S8, A-15), and defaults it to the resolved `maximumDurationInSeconds` when absent. For any `m`, it accepts `token.maxExpirationMinutes = m` exactly when `m` is an integer in `[1, 60]`. For any valid config, `buildRunParams` passes `maximumDurationInSeconds` unchanged, sets all three idlePolicy fields with `maxIdleDurationSeconds ≥ max(60, d)`, `suspendedDurationSeconds` equal to the config value, and `autoResumeEnabled = false`, and omits `networkConnectors` unless the config sets them.
 
-**Validates: Requirements 4.10, 11.1, 11.2**
+**Validates: Requirements 2.5, 4.10, 11.1, 11.2**
 
 ### Property 17: Retry delay bounds
 
@@ -642,9 +653,9 @@ Threats and mitigations:
 
 - Local access to the proxy (Q-1). Mitigated by the loopback bind, the one-time secret exchanged for an HttpOnly SameSite=Strict cookie, Host allow-listing against DNS rebinding, and an Origin check on WebSocket upgrades.
 - Token leakage. The token lives in process memory only. It never appears in the State_File, logs, or browser-facing headers. WebSockets are terminated at the proxy, and the token lifetime is short (15 min default) and scoped to one port.
-- Endpoint exposure. JWE is required by AWS (A-4, checked in Phase 0). code-server runs with `--auth none` only because of that. If A-4 fails, the fallback is code-server password auth, with the password injected by the proxy.
+- Endpoint exposure. JWE is required by AWS (A-4, checked in Phase 0). code-server runs with `--auth none` only because of that. If A-4 fails, the fallback is code-server password auth, with the password injected by the proxy. Because build-time state is shared by every MicroVM (A-14), that password must not be baked into the Image; it would be set per VM at run time.
 - Credentials. They come only from the SDK default chain. Nothing writes them to disk. gitleaks runs pre-commit and in CI (R15.3), and `.gitignore` covers `.session/`, `.env*`, `cdk.out/`, `node_modules/`, `csmvm.config.json`, and `*.token` (R15.1).
-- Egress. `INTERNET_EGRESS` is on by default and can be replaced through config.
+- Egress. No connector is passed by default; the service default allows outbound internet. Connectors can be set through the optional `networkConnectorArns` config override (R2.8, Q-3).
 
 Operator_Policy sketch (R14.2, R14.3):
 
@@ -658,7 +669,8 @@ Operator_Policy sketch (R14.2, R14.3):
       "Resource": "arn:${Partition}:lambda:${Region}:${Account}:microvm-image:${Name}" },
     { "Sid": "ListMicrovmsNoResourceLevelPermissions",      // A-13 justification
       "Effect": "Allow", "Action": "lambda:ListMicrovms", "Resource": "*" },
-    // only if Phase 0 shows it is required for AWS-managed connectors:
+    // NOT included by default (no connectors are passed). Added only if S2 shows that the
+    // ALL_INGRESS connector must be passed AND that passing it requires this action:
     { "Sid": "PassNetworkConnectorNoResourceLevelPermissions",
       "Effect": "Allow", "Action": "lambda:PassNetworkConnector", "Resource": "*" },
     // only if withExecutionRole:
@@ -700,18 +712,18 @@ The final cleanup check is that `status` shows no strays and the `cdk destroy` s
 
 ## Phase 0: Real-Environment Spike
 
-The spike runs before the implementation tasks that depend on its results. It uses throwaway scripts in `spike/` (tsx and the SDK), deletes them afterward, and records results in `docs/phase0-findings.md`. The A-n statuses in requirements.md are updated from those results. Budget: at most 3 MicroVMs at a time, each with `maximumDurationInSeconds = 1800`. Wall-clock time should be under 2 hours.
+The spike runs before the implementation tasks that depend on its results. It uses throwaway scripts in `spike/` (tsx and the SDK), deletes them afterward, and records results in `docs/phase0-findings.md`. The A-n statuses in requirements.md are updated from those results. Region: `us-east-1` (Q-2). Budget (user-confirmed): at most 3 MicroVMs at a time, each with `maximumDurationInSeconds = 1800`. Before each costly spike, a cost estimate based on the Lambda MicroVMs pricing page (compute time, snapshot storage, image build) is presented and the user approves spikes one at a time. Wall-clock time should be under 2 hours.
 
 | # | Item | Experiment | Result → impact |
 |---|---|---|---|
-| S1 | A-12 build, Q-2 Region | Deploy a minimal stack with a tiny Dockerfile and a hook stub that logs every request (method, path, port) in a candidate Region. First give the build role only `s3:GetObject`. | Records the hook port, path, and timing contract, the supported base image, and whether the build role needs KMS or logs permissions. Shared hook port → in-VM front process (R13.1 note). Extra permissions → R14.6 statement list. |
-| S2 | PassNetworkConnector, Q-4 | Run with the Operator_Policy without `PassNetworkConnector` and without `executionRoleArn`. | AccessDenied naming the action → add the statement (R14.2, R14.3). Execution role required → Q-4 override becomes the default (R14.4 active). |
+| S1 | A-12 build, A-14 snapshot | Deploy a minimal stack in `us-east-1` with a tiny Dockerfile on `public.ecr.aws/lambda/microvms:al2023-minimal`, `minimumMemoryInMiB: 2048`, and a hook stub that logs every request (method, path, port). The stub starts code-server at build time. First give the build role only `s3:GetObject`. Run a MicroVM from the Image and check that code-server works after restore from the snapshot. | Records the hook port, path, and timing contract, and whether the build role needs KMS or logs permissions. Shared hook port → in-VM front process (R13.1 note). Extra permissions → R14.6 statement list. code-server broken after restore, or a per-VM value must differ → `run` restores it before the health check (A-14). |
+| S2 | Network connectors, PassNetworkConnector, Q-4 | Run with the Operator_Policy without `PassNetworkConnector`, without `executionRoleArn`, and with no network connectors. Check that the endpoint is reachable and outbound internet works. | Endpoint reachable → no connectors by default (R2.8). Endpoint unreachable → pass only `ALL_INGRESS` by default and retry; AccessDenied naming `PassNetworkConnector` → add that statement (R14.2, R14.3). Execution role required → Q-4 override becomes the default (R14.4 active). |
 | S3 | A-4 | `curl` the endpoint with no token, a malformed token, and a token for the wrong port. | All rejected → R5.4 stands. Any unauthenticated 2xx → stop and switch to the code-server password fallback (R5.4 revised). |
 | S4 | A-9 | Run a prototype proxy against code-server: workbench, service worker, extensions view, terminal, and a WebSocket left idle for at least 15 min. | Idle drops → add a WebSocket ping keepalive (config). Path or asset problems → add rewrite rules (R5.1, R5.3). |
 | S5 | A-10 | Save a file, start `while sleep 5; do date >> t; done` in the terminal, then suspend and resume. | File survives → R7.5 holds. Process survival is recorded as information only. Proxy reconnect behavior is confirmed. |
 | S6 | A-7 | `SuspendMicrovm` on SUSPENDED, `ResumeMicrovm` on RUNNING, `TerminateMicrovm` twice. | Error names go into the classifier table (R6.5, R7.6). |
 | S7 | A-2 | `GetMicrovm` and `ListMicrovms` at intervals after termination. | Retention behavior → tune the notFound grace and the stray filter (R8.2, R9.12). |
-| S8 | A-11, A-6, misc | Repeat RunMicrovm with the same clientToken. Try `maxIdleDurationSeconds = 28800`. Read the GetMicrovm endpoint and remaining-duration fields. | Same ID → R12.4 and R12.6 stand, otherwise rethink recovery. An upper bound → cap the duration (R11.1 amended). Field names go into the adapter. |
+| S8 | A-11, A-6, A-15, misc | Repeat RunMicrovm with the same clientToken. Try `maxIdleDurationSeconds = 28800` and `suspendedDurationSeconds = 28800`. Suspend a MicroVM started with a short `suspendedDurationSeconds` and observe it after that time elapses. Read the GetMicrovm endpoint and remaining-duration fields. | Same ID → R12.4 and R12.6 stand, otherwise rethink recovery. An upper bound → cap the duration (R11.1 amended). suspendedDurationSeconds range and expiry behavior → `validateConfig` bound and A-15 status. Field names go into the adapter. |
 
 Cleanup at the end of the spike:
 
@@ -726,10 +738,11 @@ The unconditional deltas below are already applied to requirements.md. The condi
 
 - R1.2 clarification: `terminate` in `TERMINATING` is a permitted self-loop that re-issues TerminateMicrovm (C7). It is needed for the R8.5 retry, and it is idempotent at AWS (A-2).
 - R1.2 and R12.6: `terminate` in `LAUNCHING` without an ID first recovers the ID with the persisted token (C6). R9.7 therefore also allows the token in TERMINATING while `microvmId` is null.
-- R2.4: launch prints the proxy base URL. The authenticated one-time URL comes from `connect` (Q-1, Q-6).
+- R2.4: launch prints the proxy base URL and never starts the proxy. The authenticated one-time URL comes from `connect` (Q-1, Q-6).
+- User decisions applied: R2.5 sets `suspendedDurationSeconds` (A-15); R2.8 passes no connectors by default (Q-3); R11.1 default is 7200; R13.7 forbids build-time secrets and per-user values (A-14).
 - R2.6: a launch failure with no MicroVM ID returns the Session to `NONE` (the State_File is deleted).
 - Q-1 adds proxy criteria: one-time login, cookie, and Host/Origin checks. These are suggested as R4.11 and R4.12 if the resolution is accepted.
-- Conditional: R11.1 cap (S8), R13.1 front-process note (S1), and R5.4 fallback (S3).
+- Conditional: R11.1 cap (S8), suspendedDurationSeconds bound (S8), ingress-only default connector (S2), R13.1 front-process note (S1), and R5.4 fallback (S3).
 
 ## Traceability Matrix
 
@@ -769,7 +782,7 @@ The unconditional deltas below are already applied to requirements.md. The condi
 | R11.3 | `status` notice | EX |
 | R12.1, R12.3–R12.6 | Adapter `withRetry`, persist-before-execute, recovery | EX |
 | R12.2 | `retryDelayMs` | P17 |
-| R13.1–R13.6 | `image/` | EX + ENV (S1) |
+| R13.1–R13.7 | `image/`, snapshot model (A-14) | EX + ENV (S1) |
 | R14.1–R14.6 | `infra/` stack, Operator_Policy | CDK assertions + S1, S2 |
 | R15.1–R15.4 | `.gitignore`, gitleaks, adapter credential chain | EX |
 | R16.1–R16.7 | Toolchain, Biome import rule, test suites, ENV checklist | EX |

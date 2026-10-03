@@ -15,7 +15,7 @@ The implementation is TypeScript throughout (CLI, Hook_Handler, CDK). Work proce
 
 Phase 0 runs early. Tasks that only touch pure core or local tooling (scaffold, `src/core/`, State store, redaction) do not depend on spike results and can run in parallel with it. Tasks that depend on a spike result say so in their bullets: adapter field names, error classification, hook contract, IAM statements, and the duration cap.
 
-Every Phase 0 task, and the final ENV task, is gated. It **requires explicit user confirmation before any AWS call that creates or deletes resources** (including `cdk bootstrap`, `cdk deploy`, `cdk destroy`, RunMicrovm, and TerminateMicrovm). Phase 0 budget: at most 3 concurrent MicroVMs, each with `maximumDurationInSeconds = 1800`. Spike scripts never print Auth_Token values. Each spike records its result in `docs/phase0-findings.md` and updates the affected A-n / Q-n status and R-n criteria in `requirements.md`.
+Every Phase 0 task, and the final ENV task, is gated. It **requires explicit user confirmation before any AWS call that creates or deletes resources** (including `cdk bootstrap`, `cdk deploy`, `cdk destroy`, RunMicrovm, and TerminateMicrovm). Phase 0 runs in `us-east-1`. Phase 0 budget (user-confirmed): at most 3 concurrent MicroVMs, each with `maximumDurationInSeconds = 1800`. Before each costly spike, present a cost estimate based on the Lambda MicroVMs pricing page (compute time, snapshot storage, image build) and get approval for that spike; spikes are approved one at a time. Spike scripts never print Auth_Token values. Each spike records its result in `docs/phase0-findings.md` and updates the affected A-n / Q-n status and R-n criteria in `requirements.md`.
 
 ## Tasks
 
@@ -28,16 +28,18 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - No AWS calls in this task.
     - _Requirements: R16.7 (supports A-2, A-4, A-6, A-7, A-9–A-13, Q-2, Q-4)_
 
-  - [ ] 1.2 S1: Verify the image build pipeline and Region (A-12, Q-2)
+  - [ ] 1.2 S1: Verify the image build pipeline and snapshot restore (A-12, A-14)
     - Requires explicit user confirmation before any AWS call that creates or deletes resources. Record the result in `docs/phase0-findings.md` and update the affected A-n / R-n.
-    - Run `cdk bootstrap` only if the account/Region is not bootstrapped (confirmed). Review `cdk diff`, then deploy the spike stack in a candidate Region with manual approval. The build role gets only `s3:GetObject` at first.
-    - Record the hook port, path prefix, and timing contract; the supported base image; and any extra build-role permissions (KMS, logs).
+    - Run `cdk bootstrap` only if `us-east-1` is not bootstrapped (confirmed). Review `cdk diff`, then deploy the spike stack in `us-east-1` with manual approval. The spike Dockerfile uses `public.ecr.aws/lambda/microvms:al2023-minimal`, the Image uses `minimumMemoryInMiB: 2048`, and the build role gets only `s3:GetObject` at first.
+    - Start code-server during the build so it is captured in the snapshot. Run one MicroVM and confirm code-server works after restore (A-14); record whether any per-VM value must be restored in the `/run` hook.
+    - Record the hook port, path prefix, and timing contract, and any extra build-role permissions (KMS, logs).
     - If hooks share the Code_Server_Port, apply the R13.1 front-process amendment.
-    - _Requirements: R13.1, R13.2, R13.3, R13.4, R14.1, R14.6_
+    - _Requirements: R13.1, R13.2, R13.3, R13.4, R13.7, R14.1, R14.6_
 
-  - [ ] 1.3 S2: Verify PassNetworkConnector and Execution_Role need (A-13, Q-4)
+  - [ ] 1.3 S2: Verify default networking, PassNetworkConnector, and Execution_Role need (Q-3, A-13, Q-4)
     - Requires explicit user confirmation before any AWS call that creates or deletes resources. Record the result in `docs/phase0-findings.md` and update the affected A-n / R-n.
-    - Call RunMicrovm (`maximumDurationInSeconds = 1800`) with the draft Operator_Policy, which omits `lambda:PassNetworkConnector`, and without `executionRoleArn`.
+    - Call RunMicrovm (`maximumDurationInSeconds = 1800`) with the draft Operator_Policy, which omits `lambda:PassNetworkConnector`, without `executionRoleArn`, and with no network connectors.
+    - Check that the MicroVM_Endpoint is reachable and outbound internet works. If the endpoint is unreachable, retry passing only `ALL_INGRESS`; that then becomes the R2.8 default, and `lambda:PassNetworkConnector` is added only if that call is denied for it.
     - With the same policy, exercise all seven actions (including CreateMicrovmAuthToken, Get, Suspend, Resume) to confirm that Image-ARN scoping is accepted for instance actions (A-13).
     - If the call is denied with a named action, record which statement must be added. If an Execution_Role is required, make the Q-4 override the default.
     - Terminate the MicroVM afterward (confirmed).
@@ -46,7 +48,8 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
   - [ ] 1.4 S3: Verify endpoint authentication (A-4)
     - Requires explicit user confirmation before any AWS call that creates or deletes resources. Record the result in `docs/phase0-findings.md` and update the affected A-n / R-n.
     - `curl` the MicroVM_Endpoint with no token, a malformed token, and a token for the wrong port.
-    - If any request returns an unauthenticated 2xx, stop and revise R5.4 to the code-server password fallback before the image tasks.
+    - If any request returns an unauthenticated 2xx, stop and revise R5.4 to the code-server password fallback (set per VM at run time, never baked into the Image, A-14) before the image tasks.
+    - Blocking: this task must be complete before any task 13.x starts, because `--auth none` is kept only on the strength of this result.
     - _Requirements: R5.4, R4.2, R4.7_
 
   - [ ] 1.5 S4: Verify code-server through a prototype proxy (A-9)
@@ -73,11 +76,12 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - Record the retention behavior and the recommended notFound grace value for observation rows O6, O7, and O12 (task 5.2).
     - _Requirements: R8.2, R9.12, R9.9_
 
-  - [ ] 1.9 S8: Verify clientToken idempotency, idle bound, and GetMicrovm fields (A-11, A-6)
+  - [ ] 1.9 S8: Verify clientToken idempotency, idle policy bounds, and GetMicrovm fields (A-11, A-6, A-15)
     - Requires explicit user confirmation before any AWS call that creates or deletes resources. Record the result in `docs/phase0-findings.md` and update the affected A-n / R-n.
-    - Repeat RunMicrovm with the same clientToken and confirm the same MicroVM ID comes back. Try `maxIdleDurationSeconds = 28800`.
+    - Repeat RunMicrovm with the same clientToken and confirm the same MicroVM ID comes back. Try `maxIdleDurationSeconds = 28800` and `suspendedDurationSeconds = 28800`.
+    - Suspend a MicroVM started with a short `suspendedDurationSeconds` and record what happens after it elapses (assumed: terminated) and the accepted range (A-15).
     - Record the GetMicrovm field names for the endpoint and remaining duration.
-    - If the IDs differ, stop and rethink R12.4 and R12.6 with the user. If there is an upper bound `B < 28800`, amend R11.1 and R11.2.
+    - If the IDs differ, stop and rethink R12.4 and R12.6 with the user. If there is an upper bound `B < 28800`, amend R11.1 and R11.2. If the suspendedDurationSeconds range is narrower than 1–28800, amend R2.5 and the bound in task 7.1.
     - _Requirements: R12.4, R12.6, R2.5, R11.1, R11.2, R9.8_
 
   - [ ] 1.10 Clean up the spike and finalize findings
@@ -114,7 +118,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - Add `.gitignore` covering `.session/`, `.env*`, `cdk.out/`, `node_modules/`, `csmvm.config.json`, `*.token`, and `infra/cdk-outputs.json`.
     - Add `.gitleaks.toml`.
     - Add `.githooks/pre-commit`, which runs `gitleaks protect --staged --config .gitleaks.toml`. Enabling the hook is documented in the README (task 15.2). The agent does not change git config.
-    - Add `csmvm.config.example.json` with placeholder values only.
+    - Add `csmvm.config.example.json` with placeholder values only (`region: "us-east-1"`, `maximumDurationInSeconds: 7200`, no `networkConnectorArns`).
     - Add `.github/workflows/ci.yml`: Nix devShell, `pnpm install --frozen-lockfile`, `pnpm exec biome check`, `pnpm run test`, and `gitleaks detect --config .gitleaks.toml`. Note the project CI policy in a comment.
     - _Requirements: R15.1, R15.2, R15.3_
 
@@ -236,11 +240,12 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 - [ ] 7. Config validation, run parameters, and retry policy
   - [ ] 7.1 Implement `validateConfig` in `src/core/config.ts`
     - Hand-written pure validation with no dependencies, producing `CliConfig` with the design defaults.
-    - Bounds: `maximumDurationInSeconds` is an integer in 1–28800, capped at `B` if S8 found one. `token.maxExpirationMinutes` is an integer in 1–60. Also validate ports, timeouts, retry parameters, and connector ARNs.
-    - _Requirements: R4.10, R11.1, R11.2, R2.8, R4.7, R12.1_
+    - Bounds: `maximumDurationInSeconds` is an integer in 1–28800 (default 7200), capped at `B` if S8 found one. `suspendedDurationSeconds` is an integer in 1–28800 (upper bound unverified, tightened per S8), defaulting to the resolved `maximumDurationInSeconds`. `token.maxExpirationMinutes` is an integer in 1–60. Default `region` is `us-east-1`. Also validate ports, timeouts, retry parameters, and the optional `networkConnectorArns` list (absent by default).
+    - _Requirements: R4.10, R11.1, R11.2, R2.5, R2.8, R4.7, R12.1_
 
   - [ ] 7.2 Implement `buildRunParams` in `src/core/run-params.ts`
-    - Image ARN, maximum duration, clientToken, both connectors, and an idlePolicy with all fields set (`autoResumeEnabled: false`, `maxIdleDurationSeconds = max(60, d)`).
+    - Image ARN, maximum duration, clientToken, and an idlePolicy with all three fields set (`autoResumeEnabled: false`, `maxIdleDurationSeconds = max(60, d)`, `suspendedDurationSeconds` from config).
+    - `networkConnectors` omitted by default; passed exactly as configured when `networkConnectorArns` is set (or ingress-only if S2 required it).
     - `runHookPayload = {"sessionId"}`, at most 4096 bytes. `executionRoleArn` only when configured.
     - _Requirements: R2.1, R2.5, R2.8, R2.9, R11.1_
 
@@ -253,11 +258,11 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - **Validates: Requirements 12.2**
 
   - [ ] 7.5 Write the property test for config bounds and run parameters
-    - **Property 16: Config bounds and run parameters**
-    - **Validates: Requirements 4.10, 11.1, 11.2**
+    - **Property 16: Config bounds and run parameters** (includes the 7200 default, the `suspendedDurationSeconds` bound and default, all three idlePolicy fields, and no connectors by default)
+    - **Validates: Requirements 2.5, 4.10, 11.1, 11.2**
 
   - [ ]* 7.6 Write unit tests for `buildRunParams`
-    - The payload contains only `sessionId` and is at most 4096 bytes. Both connector ARNs and their overrides are passed. `executionRoleArn` is absent by default.
+    - The payload contains only `sessionId` and is at most 4096 bytes. No `networkConnectors` are passed by default; a configured override is passed exactly. `suspendedDurationSeconds` defaults to `maximumDurationInSeconds`. `executionRoleArn` is absent by default.
     - _Requirements: R2.5, R2.8, R2.9_
 
 - [ ] 8. Checkpoint: pure core complete
@@ -270,7 +275,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - `read()` returns `FileRead`. `quarantine()` renames to `state.json.corrupt-<ISO>`. NONE deletes the file. No token or credential fields.
     - _Requirements: R9.5, R9.6, R9.7, R4.5, R15.4_
 
-  - [ ]* 9.2 Write unit tests for the State store
+  - [ ] 9.2 Write unit tests for the State store
     - Use a temp dir. Cover round trip, atomic rename, corrupt JSON and schema failures, quarantine naming, delete on NONE, file modes, and rejection of extra fields.
     - _Requirements: R9.5, R9.6, R9.7_
 
@@ -278,7 +283,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - `redact()` masks the registered current and previous token values and any five-segment base64url (JWE-shaped) string. `RedactingLogger` wraps the terminal output. The error formatter builds messages from `{operation, errorName, microvmId?}`.
     - _Requirements: R4.4, R12.5_
 
-  - [ ]* 9.4 Write unit tests for redaction
+  - [ ] 9.4 Write unit tests for redaction
     - _Requirements: R4.4, R12.5_
 
   - [ ] 9.5 Implement the AWS_Adapter in `src/shell/aws-adapter.ts`
@@ -292,7 +297,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - In-memory `MicrovmsPort` with status scripts, delayed visibility, per-call error injection, idempotent clientToken handling, and call recording.
     - _Requirements: R16.6_
 
-  - [ ]* 9.7 Write unit tests for `withRetry`
+  - [ ] 9.7 Write unit tests for `withRetry`
     - Use an injected op, sleep, and random source; the SDK is never constructed. Retryable errors are retried up to `maxAttempts`, non-retryable errors are returned at once, and `run` keeps the same clientToken on every attempt.
     - _Requirements: R12.1, R12.3, R12.4_
 
@@ -326,12 +331,12 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - `--stray <id>` checks that the ID is in `listByImage`, prompts with that ID, terminates it, and does not touch the Session.
     - _Requirements: R8.1, R8.2, R8.4, R8.5, R8.7, R8.8, R10.2_
 
-  - [ ]* 10.7 Write CLI behavior tests for launch and config
+  - [ ] 10.7 Write CLI behavior tests for launch and config
     - Use FakeMicrovms, a fake prompt, a fake TTY, a fake clock, and a temp dir.
     - Cover: zero mutating calls on rejection or decline; non-TTY without `--yes` exits 2; token persisted before `run`; same token on retry; interrupted-launch recovery; strays block launch; the R2.6 error matrix; launch timeout leads to FAILED; invalid config means zero calls.
     - _Requirements: R1.4, R2.1–R2.7, R3.4, R10.1, R10.3, R10.4, R10.5, R12.4, R12.6_
 
-  - [ ]* 10.8 Write CLI behavior tests for status, suspend, resume, and terminate
+  - [ ] 10.8 Write CLI behavior tests for status, suspend, resume, and terminate
     - Cover: status fields and cost notice; Conflict leads to reconcile; terminate when already TERMINATED exits 0; retryable terminate failure stays TERMINATING; notFound leads to TERMINATED; the `--stray` image check; C6 recovery then terminate; corrupt file quarantine; no tokens or credentials on disk.
     - _Requirements: R6.1, R6.5, R7.1, R7.6, R8.1, R8.2, R8.4, R8.5, R8.7, R8.8, R9.5, R9.8, R11.3, R12.5, R15.4_
 
@@ -360,11 +365,11 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - Polls the State_File every 1 s. Non-RUNNING closes open WebSockets. TERMINATING or TERMINATED closes the listener and releases the port.
     - _Requirements: R4.1, R4.9, R6.4, R8.6_
 
-  - [ ] 11.6 Wire the `connect` command and `launch --connect`
-    - `src/cli/commands/connect.ts` requires RUNNING, gets the endpoint, starts the server in the foreground, and prints the one-time login URL. `launch --connect` hands off to connect.
+  - [ ] 11.6 Wire the `connect` command
+    - `src/cli/commands/connect.ts` requires RUNNING, gets the endpoint, starts the server in the foreground, and prints the one-time login URL. `launch` never starts the proxy.
     - _Requirements: R4.1, R4.11, R2.4_
 
-  - [ ]* 11.7 Write proxy tests for HTTP, local auth, and token handling
+  - [ ] 11.7 Write proxy tests for HTTP, local auth, and token handling
     - Use a fake upstream on 127.0.0.1 that records headers.
     - Cover: auth and port headers; loopback-only bind; login, cookie, and 401; Host and Origin rejection; cookie stripped upstream; refresh at the margin; 502 on refresh failure; token absent from responses and logs (JWE regex).
     - _Requirements: R4.1, R4.2, R4.4, R4.5, R4.6, R4.7, R4.8, R4.11, R4.12_
@@ -381,9 +386,10 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 13. MicroVM Image
+  - Prerequisite: task 1.4 (S3, endpoint authentication) must be complete before any 13.x task starts; task 1.2 (S1) must also be complete.
   - [ ] 13.1 Implement the Hook_Handler in `image/hooks/`
     - Own `package.json` in the workspace. Implements the hook port, path, and contract from S1.
-    - `run` polls the code-server health check until a deadline (run hook timeout minus 2 s), then returns 200 or 503.
+    - `run` does not start code-server (it is already running from the build-time snapshot, A-14). It only polls the code-server health check until a deadline (run hook timeout minus 2 s), then returns 200 or 503. If S1 found a per-VM value that must differ, `run` restores it before the health check, without injecting secrets.
     - `resume`, `suspend`, and `terminate` return 200 at once and log the hook name and the `sessionId` from the payload.
     - `/ready` and `/validate` use the longer deadline.
     - If S1 requires a shared port, the handler is the front process and reverse-proxies to code-server on 8081, including WebSocket.
@@ -394,14 +400,15 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - _Requirements: R13.2, R13.3_
 
   - [ ] 13.3 Write the Dockerfile, `entrypoint.sh`, and workspace seed
-    - Multi-stage build: compile the hooks, then a runtime stage on the base image from S1.
+    - Multi-stage build: compile the hooks, then a runtime stage `FROM public.ecr.aws/lambda/microvms:al2023-minimal` (verified base, A-12; base image ARN form `arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1`).
     - code-server from the release tarball at exact `ARG CODE_SERVER_VERSION` with a pinned SHA-256. Runtime packages: git, curl, tini. Non-root `coder` user, empty `workspace-seed/`.
-    - The entrypoint starts the Hook_Handler and runs `code-server --auth none --bind-addr 0.0.0.0:8080 --disable-telemetry /home/coder/workspace` under tini. If S3 required the password fallback, use that instead.
-    - _Requirements: R13.1, R13.5, R13.6, R5.4_
+    - The entrypoint starts the Hook_Handler and runs `code-server --auth none --bind-addr 0.0.0.0:8080 --disable-telemetry /home/coder/workspace` under tini during the image build, so the running process is captured in the snapshot. If S3 required the password fallback, use that instead, with the password set per VM at run time.
+    - Generate no secret and no per-user unique value at build time (no password, session secret, or keys).
+    - _Requirements: R13.1, R13.5, R13.6, R13.7, R5.4_
 
   - [ ]* 13.4 Write static image checks
-    - Cover the exact-version and SHA-256 pin regex, the presence of `--auth none` (or the fallback), and gitleaks plus a credential-pattern grep over `image/`.
-    - _Requirements: R13.5, R13.6, R5.4, R15.2_
+    - Cover the exact-version and SHA-256 pin regex, the presence of `--auth none` (or the fallback), the absence of build-time `PASSWORD`/`HASHED_PASSWORD` or generated secrets, and gitleaks plus a credential-pattern grep over `image/`.
+    - _Requirements: R13.5, R13.6, R13.7, R5.4, R15.2_
 
 - [ ] 14. Infrastructure (CDK)
   - [ ] 14.1 Scaffold the `infra/` CDK package
@@ -410,11 +417,11 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 
   - [ ] 14.2 Implement the build context, Image_Build_Role, and Image in `infra/lib/stack.ts`
     - S3 asset of `../image`. A build role trusted only by `lambda.amazonaws.com` with `aws:SourceAccount`, granted `s3:GetObject` on the asset object only, plus extra statements only if S1 required them.
-    - `CfnMicrovmImage` with hook timeouts. Outputs: ImageArn, Region, and OperatorPolicyArn.
+    - `CfnMicrovmImage` in `us-east-1` on base image `arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1`, with hook timeouts and resources `minimumMemoryInMiB: 2048` (2 GB / 1 vCPU baseline, peaks up to 4x automatically). Outputs: ImageArn, Region, and OperatorPolicyArn.
     - _Requirements: R14.1, R14.6, R13.2, R13.4_
 
   - [ ] 14.3 Implement the Operator_Policy and the optional Execution_Role
-    - A managed policy with the seven `lambda:*Microvm*` actions scoped to the Image ARN. `ListMicrovms` uses `Resource: "*"` with an allow-listed Sid. Add `PassNetworkConnector` only if S2 required it.
+    - A managed policy with the seven `lambda:*Microvm*` actions scoped to the Image ARN. `ListMicrovms` uses `Resource: "*"` with an allow-listed Sid. `PassNetworkConnector` is not included by default (no connectors are passed); add it only if S2 required both the ingress connector and this action.
     - If `withExecutionRole` is set (or S2 made it the default), add a role trusted only by the MicroVMs principal with log delivery only, plus a scoped `iam:PassRole`.
     - _Requirements: R14.2, R14.3, R14.4_
 
@@ -460,9 +467,10 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 
 ## Notes
 
-- Tasks marked `*` are optional and can be skipped for a faster MVP. All property tests P1–P17 stay required, because R16.5 requires a property test for every `[PBT]` criterion.
+- Tasks marked `*` are optional and can be skipped for a faster MVP. All property tests P1–P17 stay required, because R16.5 requires a property test for every `[PBT]` criterion. The State store, redaction, `withRetry`, CLI behavior, and proxy HTTP/local-auth tests (9.2, 9.4, 9.7, 10.7, 10.8, 11.7) are required (user decision).
 - Phase 0 (task 1) and task 17 never call AWS to create or delete resources without explicit user confirmation.
-- Pure-core and local tasks (2–9.4) do not depend on spike results and can run in parallel with Phase 0. Tasks that consume spike results are scheduled after the spike they need: 5.2 after S7, 7.1 after S8, 9.5 after S6 and S8, 11.4 after S4, 13.x after S1 and S3, and 14.x after S1 and S2.
+- Pure-core and local tasks (2–9.4) do not depend on spike results and can run in parallel with Phase 0. Tasks that consume spike results are scheduled after the spike they need: 5.2 after S7, 7.1 after S8, 9.5 after S6 and S8, 11.4 after S4, 13.x after S1 and S3 (task 1.4 is a hard prerequisite for every 13.x task, because `--auth none` depends on it), and 14.x after S1 and S2.
+- Ordering (user-confirmed): scaffold and pure core first; Phase 0 spikes are approved one at a time, each after its cost estimate, and run in parallel with local work.
 - Each property test runs `numRuns >= 100` and is titled `Feature: lambda-microvm-code-server, Property N: <title>`.
 - The automated suite never constructs the SDK client and needs no credentials or network (R16.6).
 
