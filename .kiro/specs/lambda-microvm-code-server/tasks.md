@@ -92,8 +92,8 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - Set the final A-n / Q-n statuses in `requirements.md` and apply the confirmed "Requirement deltas" from design.
     - _Requirements: R10.6, R15.2, R16.7_
 
-- [ ] 2. Repository scaffold and hygiene
-  - [ ] 2.1 Create the pnpm workspace and TypeScript baseline
+- [x] 2. Repository scaffold and hygiene
+  - [x] 2.1 Create the pnpm workspace and TypeScript baseline
     - Root `package.json` with `"packageManager": "pnpm@<exact>"` and scripts `check`, `lint`, `fmt`, `test`, `typecheck`, and `build` that invoke project-local Vite+ (`vp ...`). `test` runs `vp test`.
     - `pnpm-workspace.yaml` listing `.`, `infra`, and `image/hooks`, plus `overrides` that alias `vite` to `npm:@voidzero-dev/vite-plus-core@latest` and pin `vitest` to the exact version from `vp toolchain vitest` (so the project and `vp test` share one Vitest). A strict `tsconfig.json`.
     - `vite.config.ts` from `vite-plus` holding the `test` (Vitest), `lint` (Oxlint), `fmt` (Oxfmt), and `pack` sections.
@@ -102,21 +102,21 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - Empty `src/core/`, `src/shell/`, `src/cli/`, and `test/` directories, each with an index placeholder.
     - _Requirements: R16.1_
 
-  - [ ] 2.2 Configure the Oxlint core import boundary
+  - [x] 2.2 Configure the Oxlint core import boundary
     - In `vite.config.ts`, enable Oxlint (lint) and Oxfmt (fmt) through Vite+.
     - Add an Oxlint `no-restricted-imports` override for `src/core/**` to ban `@aws-sdk/*`, `node:fs`, `node:net`, `node:http`, `node:https`, `node:process`, and `node:child_process`. Confirm Oxlint can express both the `node:`-prefixed specifiers and the `src/core/**` path scope; if it cannot, rely on the import-scan test (task 2.6) as the authoritative boundary guard.
     - _Requirements: R16.2, R16.4_
 
-  - [ ] 2.3 Configure Vitest and property-test conventions
+  - [x] 2.3 Configure Vitest and property-test conventions
     - Configure the `test` section in `vite.config.ts` (Vitest via Vite+). Add `test/support/pbt.ts`, which exports `numRuns >= 100` and a title helper producing `Feature: lambda-microvm-code-server, Property N: <title>`.
     - Add one smoke test so `pnpm test` passes.
     - _Requirements: R16.5, R16.6_
 
-  - [ ] 2.4 Add the Nix flake devShell
+  - [x] 2.4 Add the Nix flake devShell
     - Add `flake.nix` and `flake.lock`. The devShell supplies Node.js, pnpm, the AWS CDK CLI, and gitleaks at pinned versions.
     - _Requirements: R16.3_
 
-  - [ ] 2.5 Add secret protection and CI
+  - [x] 2.5 Add secret protection and CI
     - Add `.gitignore` covering `.session/`, `.env*`, `cdk.out/`, `node_modules/`, `csmvm.config.json`, `*.token`, and `infra/cdk-outputs.json`.
     - Add `.gitleaks.toml`.
     - Add `.vite-hooks/pre-commit`, which runs `gitleaks protect --staged --config .gitleaks.toml` and then `vp staged` (Oxlint/Oxfmt on staged files). The user enables it with `vp hooks enable`; the agent does not change git config and does not add Husky or another hook manager. Enabling is documented in the README (task 15.2).
@@ -124,7 +124,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - Add `.github/workflows/ci.yml`: install Nix with `DeterminateSystems/determinate-nix-action` pinned by commit SHA, run on `ubuntu-24.04` (no macOS matrix), and inside `nix develop --command` run `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test`, `pnpm audit --audit-level=high` (fail on high or above; individually ignore only confirmed non-applicable advisories), and `gitleaks detect --config .gitleaks.toml`. Note the project CI policy in a comment.
     - _Requirements: R15.1, R15.2, R15.3_
 
-  - [ ] 2.6 Write the import-boundary scan test
+  - [x] 2.6 Write the import-boundary scan test
     - `test/hygiene/core-imports.test.ts` scans every file under `src/core/` and fails on any banned import (second check next to the Oxlint `no-restricted-imports` rule, and the authoritative guard if Oxlint cannot express it).
     - _Requirements: R16.4_
 

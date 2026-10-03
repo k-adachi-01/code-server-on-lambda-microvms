@@ -1,0 +1,55 @@
+# CI policy (R15.1-R15.3, tech.md):
+#   - Runs on ubuntu-24.04 only. There is NO macOS matrix: the toolchain is
+#     reproduced through the Nix flake devShell, so one Linux runner is the
+#     authoritative environment.
+#   - Nix is installed with DeterminateSystems/determinate-nix-action pinned by
+#     commit SHA (not a moving tag) for supply-chain integrity.
+#   - All project commands run INSIDE `nix develop --command` so Node.js, pnpm,
+#     the AWS CDK CLI, and gitleaks are exactly the flake-pinned versions.
+#   - pnpm installs with --frozen-lockfile (lockfile is committed and must match).
+#   - `pnpm audit --audit-level=high` must pass; ignore only confirmed
+#     non-applicable advisories individually (do not lower the level).
+#   - gitleaks runs with the same config as the local pre-commit hook.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Full history so `gitleaks detect` can scan commits, not just the tree.
+          fetch-depth: 0
+
+      - name: Install Determinate Nix
+        # Pinned by commit SHA = v3.23.0 of DeterminateSystems/determinate-nix-action.
+        # Bump the comment and SHA together when upgrading.
+        uses: DeterminateSystems/determinate-nix-action@4d65ea9cab522b6d9f29a170aed23ededc1b27af # v3.23.0
+
+      - name: Install dependencies
+        run: nix develop --command pnpm install --frozen-lockfile
+
+      - name: Check (format + lint + typecheck)
+        run: nix develop --command pnpm check
+
+      - name: Test
+        run: nix develop --command pnpm test
+
+      - name: Audit dependencies
+        run: nix develop --command pnpm audit --audit-level=high
+
+      - name: Secret scan
+        run: nix develop --command gitleaks detect --config .gitleaks.toml --redact

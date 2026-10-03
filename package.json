@@ -1,0 +1,36 @@
+{
+  "name": "code-server-on-lambda-microvms",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local CLI that runs code-server in a single AWS Lambda MicroVM.",
+  "bin": {
+    "csmvm": "./dist/cli/main.js"
+  },
+  "type": "module",
+  "scripts": {
+    "check": "vp check",
+    "lint": "vp lint",
+    "fmt": "vp fmt",
+    "test": "vp test",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@aws-sdk/client-lambda-microvms": "3.1146.0",
+    "commander": "15.0.0",
+    "ws": "8.22.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "@types/ws": "8.18.2",
+    "fast-check": "4.10.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite-plus": "1.0.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "pnpm@11.17.0"
+}

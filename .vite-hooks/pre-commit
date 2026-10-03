@@ -1,0 +1,15 @@
+#!/bin/sh
+# Project-owned Vite+ pre-commit hook (R15.3, tech.md).
+#
+# Enable once per clone with:  vp hooks enable   (sets core.hooksPath to .vite-hooks)
+# This script is committed; the generated dispatcher/shims under .vite-hooks/_
+# are gitignored and recreated by `vp hooks enable` / `vp config`.
+#
+# Do NOT add Husky or any other hook manager, and do not change git config here.
+set -eu
+
+# 1. Secret scan of staged changes. Blocks the commit if a secret is detected.
+gitleaks protect --staged --config .gitleaks.toml
+
+# 2. Lint/format staged files per the `staged` block in vite.config.ts.
+vp staged

@@ -1,0 +1,26 @@
+{
+  "region": "us-east-1",
+  "imageArn": "arn:aws:lambda:us-east-1:000000000000:microvm-image:REPLACE_ME",
+  "maximumDurationInSeconds": 7200,
+  "suspendedDurationSeconds": 7200,
+  "codeServerPort": 8080,
+  "proxy": {
+    "listenPort": 8787,
+    "localAuth": true
+  },
+  "token": {
+    "maxExpirationMinutes": 15,
+    "refreshMarginSeconds": 60
+  },
+  "timeouts": {
+    "launchSeconds": 300,
+    "suspendSeconds": 300,
+    "resumeSeconds": 300
+  },
+  "retry": {
+    "maxAttempts": 5,
+    "baseMs": 200,
+    "capMs": 10000
+  },
+  "pollIntervalSeconds": 3
+}

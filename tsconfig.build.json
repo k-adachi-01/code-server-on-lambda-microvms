@@ -1,0 +1,12 @@
+{
+  // CLI build: compile src/ to dist/ with tsc (no bundling, per tech.md).
+  // package.json `bin` points at dist/cli/main.js.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "test", "infra", "image", "cdk.out"]
+}

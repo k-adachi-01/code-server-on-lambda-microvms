@@ -1,0 +1,44 @@
+# gitleaks configuration for code-server-on-lambda-microvms (R15.3).
+#
+# Used identically by the local pre-commit hook (`gitleaks protect --staged
+# --config .gitleaks.toml`) and by CI (`gitleaks detect --config
+# .gitleaks.toml`). We extend the built-in default ruleset and add a few
+# project-specific rules and a tight allowlist for tracked example files.
+
+title = "code-server-on-lambda-microvms gitleaks config"
+
+# Start from gitleaks' maintained default ruleset, then layer our additions.
+[extend]
+useDefault = true
+
+# --- Project-specific rules ---
+
+[[rules]]
+id = "lambda-microvm-auth-token-jwe"
+description = "Lambda MicroVM Auth_Token (JWE, five base64url segments)"
+# Five dot-separated base64url segments. Auth_Tokens must never be committed.
+regex = '''\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'''
+keywords = ["eyj", "token"]
+
+[[rules]]
+id = "aws-access-key-id"
+description = "AWS Access Key ID"
+regex = '''\b((?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ABIA)[A-Z0-9]{16})\b'''
+keywords = ["akia", "asia", "aroa"]
+
+# --- Allowlist ---
+# Example/config templates and docs intentionally contain placeholder values.
+[allowlist]
+description = "Ignore placeholder values in tracked example and lock files"
+paths = [
+  '''csmvm\.config\.example\.json''',
+  '''pnpm-lock\.yaml''',
+  '''flake\.lock''',
+  '''\.gitleaks\.toml''',
+]
+regexes = [
+  # Placeholder ARNs / IDs used in examples.
+  '''REPLACE_ME''',
+  '''arn:aws:lambda:us-east-1:000000000000:''',
+  '''EXAMPLE''',
+]

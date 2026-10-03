@@ -1,6 +1,27 @@
 # Kiro CLI local settings and runtime state (personal, not shared)
 .kiro/settings/
 
-# NOTE: the full project .gitignore (`.session/`, `.env*`, `cdk.out/`,
-# `node_modules/`, `csmvm.config.json`, `*.token`, `infra/cdk-outputs.json`)
-# is added in scaffold task 2.5. Merge this entry there.
+# --- Project .gitignore (scaffold task 2.5, R15.1) ---
+
+# Local session state and secrets
+.session/
+.env
+.env.*
+
+# Node / build output
+node_modules/
+dist/
+cdk.out/
+
+# Local CLI config (holds region + Image ARN; the example is tracked instead)
+csmvm.config.json
+
+# Auth_Token / credential dumps (never commit)
+*.token
+
+# CDK outputs consumed by `config import`
+infra/cdk-outputs.json
+
+# Vite+ generated git-hook dispatcher and shims (project-owned hook scripts
+# such as .vite-hooks/pre-commit ARE tracked; only the generated `_` dir is not)
+.vite-hooks/_/

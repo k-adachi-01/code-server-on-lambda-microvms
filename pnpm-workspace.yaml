@@ -1,0 +1,38 @@
+# pnpm workspace for code-server-on-lambda-microvms.
+#
+# Members:
+#   .            root CLI package (src/core, src/shell, src/cli, test)
+#   infra        CDK app (separate package; added in task 5)
+#   image/hooks  bundled MicroVM hook handler (added in task 4)
+#
+# `infra` and `image/hooks` are declared now so the workspace shape is stable;
+# their package.json files land with their own tasks.
+packages:
+  - "."
+  - "infra"
+  - "image/hooks"
+
+# esbuild (pulled in via tsx) runs a postinstall to place its platform binary.
+# Allow it explicitly so installs are not gated by the ambient pnpm build policy.
+allowBuilds:
+  esbuild: true
+
+# NOTE: tech.md states minimumReleaseAge is NOT used by this project. If an
+# ambient (global) pnpm config enables it, `pnpm install` may try to add a
+# `minimumReleaseAgeExclude` entry here; do not commit it.
+
+# Vite+ toolchain alignment (required by tech.md and the Vite+ manual-install guide).
+#
+# - `vite` is aliased to Vite+'s core package so any dependency that imports
+#   `vite` resolves to the single toolchain copy (avoids duplicate-Vite identity
+#   bugs). `@latest` tracks the installed vite-plus version (currently 1.0.0).
+# - `vitest` is pinned to the EXACT version Vite+ bundles so the project and
+#   `vp test` share one Vitest (no split mocks / expect / runner state).
+#
+#   The pin MUST equal the output of `vp toolchain vitest` for the installed
+#   vite-plus. For vite-plus 1.0.0 that is 5.0.1 (verified from
+#   `vite-plus@1.0.0` dependencies: vitest=5.0.1). When you bump vite-plus,
+#   re-run `vp toolchain vitest` and update this pin to match.
+overrides:
+  vite: npm:@voidzero-dev/vite-plus-core@latest
+  vitest: 5.0.1
