@@ -62,7 +62,8 @@ Architecture and lifecycle details are in the spec (see [Project layout](#projec
   gitleaks at pinned versions.
 - AWS credentials available through the standard AWS SDK credential provider chain (SSO
   recommended). The CLI never reads or writes credential files itself.
-- The project's MicroVM image deployed once via CDK, and the Operator policy attached to the role
+- The project's MicroVM image built once (CDK deploy for the build inputs + `scripts/build-image.mjs`
+  to build the image via the Lambda MicroVMs API), and the Operator policy attached to the role
   you use.
 
 ## Getting started
@@ -77,16 +78,29 @@ pnpm install
 # 3. (optional) enable the pre-commit hook: runs gitleaks + lint/format on staged files
 vp hooks enable
 
-# 4. Deploy persistent infrastructure (review the diff first — this creates AWS resources)
+# 4. Bundle the MicroVM lifecycle hook handler to a single file
+#    (produces image/hooks/dist/handler.mjs, which the image build copies in)
+pnpm -C image/hooks build
+
+# 5. Deploy persistent infrastructure (review the diff first — this creates AWS
+#    resources). This creates the least-privilege IAM roles/policy and uploads
+#    the image build context to S3. It does NOT build the MicroVM image itself.
 pnpm -C infra exec cdk diff
 pnpm -C infra exec cdk deploy --outputs-file cdk-outputs.json
 
-# 5. Import the deployed Image ARN / Region into the local config
+# 6. Build the MicroVM image via the Lambda MicroVMs API and wait for it to
+#    become ACTIVE. (The image is built out-of-band rather than by CloudFormation
+#    — see docs/phase0-findings.md, S1, for why the CFN path was not used.)
+#    Reads infra/cdk-outputs.json for the build role and uploaded artifact.
+node scripts/build-image.mjs
+
+# 7. Import the deployed Image ARN / Region into the local config
 pnpm csmvm config import
 
-# 6. Attach the Operator_Policy (printed in the CDK outputs) to your SSO role.
+# 8. Attach the Operator_Policy (printed in the CDK outputs) to your SSO role.
 ```
 
+Steps 4–6 are the one-time image setup; after that, `launch` has an image to run.
 `cdk deploy` / `cdk destroy` are intentionally run **without** auto-approval flags. Always review
 `cdk diff` before applying.
 

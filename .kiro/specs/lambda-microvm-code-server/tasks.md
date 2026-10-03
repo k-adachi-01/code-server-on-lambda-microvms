@@ -20,7 +20,16 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 ## Tasks
 
 - [~] 1. Phase 0: Real-environment verification spike
-  - Status note: implemented pragmatically rather than via a separate throwaway `spike/` package. S1 (image build + snapshot restore) was verified on real AWS in `ap-northeast-1` using the actual `infra/` stack and `scripts/build-image.mjs` (API-driven build), and the findings recorded in `docs/phase0-findings.md`. The remaining spikes (S2–S8) were not run as isolated experiments; their behaviors were instead confirmed in aggregate by the real end-to-end lifecycle verification in task 17 (launch → RUNNING → endpoint `/healthz` 200 → suspend → resume → terminate, all against real AWS).
+  - Status note (corrected): implemented pragmatically rather than via a separate throwaway `spike/` package. **Only S1 was actually run as a real experiment.** S1 (image build + snapshot restore, A-12/A-14) was verified on real AWS in `ap-northeast-1` using the actual `infra/` stack and `scripts/build-image.mjs`, with findings in `docs/phase0-findings.md`.
+  - The remaining spikes **S2–S8 were NOT verified.** The task 17 run was a happy-path lifecycle smoke test (launch → RUNNING → endpoint `/healthz` 200 → suspend → resume → terminate); it does **not** establish the S2–S8 facts, which each require a specific negative or boundary probe that was never performed:
+    - S2 (networking / least-privilege Operator_Policy / PassNetworkConnector / Execution_Role): not isolated.
+    - S3 (endpoint authentication: unauthenticated / malformed / wrong-port token must be rejected): **NOT verified.** This is a hard, explicitly stated prerequisite for every task 13.x — the image ships `--auth none` on the strength of S3. Because S3 is unverified, the `--auth none` decision in task 13 rests on an unconfirmed assumption and must be re-checked before relying on this image for anything exposed.
+    - S4 (code-server through a prototype proxy; idle WebSocket keepalive): not verified against the real endpoint.
+    - S5 (suspend/resume file + process preservation): file survival was implied by the smoke test but not asserted via a saved-file check; process survival not measured.
+    - S6 (wrong-state error names for the adapter classifier): not recorded; the classifier uses assumed names.
+    - S7 (post-termination visibility / notFound grace): not measured.
+    - S8 (clientToken idempotency, idle-policy bounds, GetMicrovm field names): not probed; GetMicrovm fields are derived defensively (endpoint + startedAt/max-derived remaining) rather than confirmed.
+  - Net: treat task 1 as **partially done (S1 only)**. The CLI/proxy/image are built and the happy path works on real AWS, but the S2–S8 assumptions remain unverified and should not be cited as confirmed.
   - [ ] 1.1 Create the throwaway spike harness and findings template
     - Create `spike/` with its own `package.json` (pinned `tsx`, `@aws-sdk/client-lambda-microvms`, `aws-cdk-lib`). It is not part of the pnpm workspace and is deleted in 1.10.
     - Add a minimal CDK app in `spike/` with a tiny Dockerfile and a hook stub that logs method, path, and port for every request and returns 200.
@@ -360,15 +369,17 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - Host allow-list, Origin check on WebSocket upgrades, and cookie stripping. `localAuth: false` bypasses this with a warning.
     - _Requirements: R4.11, R4.12_
 
-  - [x] 11.3 Implement HTTP forwarding in `src/shell/proxy/http.ts`
+  - [x] 11.3 Implement HTTP forwarding in `src/shell/proxy/http.ts` (+ forced-refresh in `server.ts`)
     - Forwards to `https://<endpoint>` with `X-aws-proxy-auth` and `X-aws-proxy-port`. Strips hop-by-hop headers and the auth header from responses.
-    - Returns 503 `{"state"}` when the state is not RUNNING. Returns 502 with a generic body on token failure, with the error name sent to the terminal. Upstream 401/403 triggers one forced refresh, then 502.
+    - Returns 503 `{"state"}` when the state is not RUNNING. Returns 502 with a generic body on token failure, with the error name sent to the terminal. Upstream 401/403 triggers one forced token refresh and a single retry, then 502.
+    - Fixed (review): the forced-refresh-on-401/403 path was initially unimplemented (`http.ts` just piped the upstream status through and `tokenCache.forceRefresh()` was never called). `server.ts` `handleHttp` now performs the one-refresh-then-retry, 502 on second failure. The retry is skipped for body-bearing requests whose stream cannot be replayed.
     - _Requirements: R4.2, R4.4, R4.8, R4.9_
 
   - [x] 11.4 Implement the WebSocket relay (in `src/shell/proxy/server.ts`)
     - Terminates the browser socket at the proxy. Opens the upstream socket with the three `lambda-microvms` subprotocols and relays frames both ways. Never echoes the upstream subprotocol.
     - Adds a ping keepalive if S4 found it necessary.
     - Deviation: the relay was consolidated into `server.ts` (`wsSubprotocols` + the `ws` `WebSocketServer`) rather than a separate `ws.ts`.
+    - Fixed (review): the first implementation embedded the whole JSON-encoded auth-token header map directly into `lambda-microvms.authentication.<token>`, which is not a valid RFC 6455 subprotocol token (it contains `{ } " ,` and spaces) and would fail with an invalid/duplicated-subprotocol error against the real token shape; it also forwarded a fixed `/` upstream, dropping the browser's path and query. Now `wsSubprotocols(authValue, port)` takes the single auth *value* extracted from the decoded header map (`authValueFromHeaders`), validates it as an RFC 7230 token (`isValidSubprotocolToken`), and the upstream URL preserves the browser's path + query (only scheme/host are rewritten). Note: the WS auth path is still unverified against the real endpoint (S4).
     - _Requirements: R4.3, R4.4, R5.3_
 
   - [x] 11.5 Implement the proxy server in `src/shell/proxy/server.ts`
@@ -384,6 +395,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
   - [x] 11.7 Write proxy tests for HTTP, local auth, and token handling
     - Use a fake upstream on 127.0.0.1 that records headers.
     - Cover: auth and port headers; loopback-only bind; login, cookie, and 401; Host and Origin rejection; cookie stripped upstream; refresh at the margin; 502 on refresh failure; token absent from responses and logs (JWE regex).
+    - Correction (review): the original `test/shell/proxy.test.ts` only unit-tested the pure helpers (`upstreamRequestHeaders`/`sanitizeResponseHeaders`) and the `TokenCache`; it never started `startProxy()`, so loopback bind, real header forwarding, the forced-refresh→502 path, and token non-leakage in a real response were unverified. A real integration test (`startProxy` against a fake loopback upstream) was added to actually exercise these — see `test/shell/proxy-server.test.ts`.
     - _Requirements: R4.1, R4.2, R4.4, R4.5, R4.6, R4.7, R4.8, R4.11, R4.12_
 
   - [ ]* 11.8 Write proxy tests for the WebSocket relay
@@ -397,8 +409,8 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 - [x] 12. Checkpoint: CLI and Auth_Proxy complete
   - Ensure all tests pass, ask the user if questions arise.
 
-- [x] 13. MicroVM Image
-  - Prerequisite: task 1.4 (S3, endpoint authentication) must be complete before any 13.x task starts; task 1.2 (S1) must also be complete.
+- [~] 13. MicroVM Image
+  - Prerequisite status: task 1.4 (S3, endpoint authentication) is an explicit hard prerequisite for every 13.x task and is **NOT verified** (see the task 1 status note). The image is built and runs on real AWS with `--auth none`, but the assumption that the MicroVM endpoint independently authenticates every request (making `--auth none` safe) has not been probed. Treat task 13 as functionally complete but resting on an unverified security assumption until S3 is run.
   - [x] 13.1 Implement the Hook_Handler in `image/hooks/`
     - Own `package.json` in the workspace. Implements the hook port, path, and contract from S1. Bundled to a single file through Vite+'s `pack` section (`vite.config.ts`), target/platform Node, so the MicroVM image carries no `node_modules` for the handler. The handler runs on the Node bundled with code-server (pinned indirectly by the code-server exact version + SHA-256); if S1 shows the handler needs a specific Node version, switch to an independently pinned Node.
     - `run` does not start code-server (it is already running from the build-time snapshot, A-14). It only polls the code-server health check until a deadline (run hook timeout minus 2 s), then returns 200 or 503. If S1 found a per-VM value that must differ, `run` restores it before the health check, without injecting secrets.
@@ -432,6 +444,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
   - [x] 14.2 Implement the build context, Image_Build_Role, and Image in `infra/lib/stack.ts`
     - S3 asset of `../image`. A build role trusted only by `lambda.amazonaws.com` with `aws:SourceAccount`, granted `s3:GetObject` on the asset object only.
     - Deviation: by default the stack creates only the IAM roles/policy + the S3 image asset; the MicroVM image is built out-of-band by `scripts/build-image.mjs` (direct CreateMicrovmImage/UpdateMicrovmImage API). The `CfnMicrovmImage` resource (region-derived base ARN, `ARM_64`, `ENABLED`/`DISABLED` hook enums, `minimumMemoryInMiB: 2048`) is retained behind `-c buildImageInCfn=true` because CFN stabilization timed out. Outputs: ImageArn/Region/OperatorPolicyArn.
+    - Fixed (review): `scripts/build-image.mjs` previously discarded the `UpdateMicrovmImage` response version and probed a hardcoded version list (`3.0`/`2.0`/`1.0`), so a v4+ update could latch onto an older already-`SUCCESSFUL` build and report a false `BUILD_OK`. It now uses the version returned by create/update and otherwise discovers the newest version via `ListMicrovmImageVersions` (numeric compare), so it always polls the build it just triggered.
     - _Requirements: R14.1, R14.6, R13.2, R13.4_
 
   - [x] 14.3 Implement the Operator_Policy and the optional Execution_Role
@@ -458,6 +471,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 
   - [x] 15.2 Write `README.md`
     - Covers the Nix devShell, `pnpm install`, enabling the Git hook, `cdk diff` review, `config import`, attaching the Operator_Policy, the command reference, local-auth login URL / `localAuth: false` warning, cost bounds, and links to Phase 0 findings. Also carries the Kiro University lesson-to-repo mapping table.
+    - Fixed (review): the Getting Started steps omitted the hook bundle build (`pnpm -C image/hooks build`) and the API image build (`node scripts/build-image.mjs`). Since `cdk deploy` creates only IAM + the S3 asset (not the MicroVM image), a new user following the old steps would have no image and `launch` would fail. Both steps are now in the README (steps 4 and 6) and the Prerequisites bullet reflects the API-driven image build.
     - Note: the standalone `docs/ENV-CHECKLIST.md` (task 15.1) was not written as a separate artifact; the real end-to-end verification is captured in `docs/phase0-findings.md` and the task 17 results below.
     - _Requirements: R10.6, R16.7, R11.3, R4.11, R15.3_
 
@@ -465,11 +479,12 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
   - All tests pass (118 root + 9 infra), `pnpm check` clean, `pnpm build` OK, gitleaks + hygiene clean.
   - Run `pnpm check`, `pnpm test`, `cdk synth`, `nix flake check`, and gitleaks.
 
-- [x] 17. Final ENV end-to-end verification (opt-in, costs money)
-  - Done on real AWS (`aws-poc-sandbox`, `ap-northeast-1`, `maximumDurationInSeconds = 1800`) via `/aws-sandbox-run`. Deviation: executed as a direct lifecycle run with an ad-hoc gitignored `csmvm.config.json` + manual probes rather than a scripted `docs/ENV-CHECKLIST.md`/`docs/env-results.md`; results are recorded in `docs/phase0-findings.md`.
-  - [x] 17.1 Run the ENV checklist against a real deployment
+- [~] 17. Final ENV end-to-end verification (opt-in, costs money)
+  - Scope correction: what actually ran was a **happy-path lifecycle smoke test** on real AWS (`aws-poc-sandbox`, `ap-northeast-1`, `maximumDurationInSeconds = 1800`) via `/aws-sandbox-run`, not the full ENV checklist. It proves the common path works end to end; it does **not** cover the negative/boundary ENV criteria (unauthenticated/malformed-token rejection, least-privilege policy enforcement, idle-WebSocket survival, saved-file preservation across suspend/resume, wrong-state error handling against the real API). Those map to S2–S8, which are unverified (see task 1). Deviation: executed as a direct lifecycle run with an ad-hoc gitignored `csmvm.config.json` + manual probes rather than a scripted `docs/ENV-CHECKLIST.md`/`docs/env-results.md`; results are in `docs/phase0-findings.md`.
+  - [x] 17.1 Run the happy-path lifecycle smoke test against a real deployment
     - Verified on real AWS: image v4.0 `SUCCESSFUL`/`ACTIVE`; `csmvm launch --yes` → RUNNING (exit 0); `status` → RUNNING; MicroVM endpoint `…lambda-microvm.ap-northeast-1.on.aws/healthz` → HTTP 200 (code-server JSON); `suspend` → SUSPENDED; `resume` → RUNNING; `terminate` → TERMINATED. All confirmation-gated.
-    - _Requirements: R2.4, R4.2, R4.3, R5.1, R5.2, R5.3, R6.2, R7.2, R7.5, R8.2, R13.1, R13.2, R13.4, R16.7_
+    - Not covered (needs the real ENV checklist + S2–S8): endpoint auth rejection, least-privilege policy, idle WebSocket, saved-file survival assertion, wrong-state errors.
+    - _Requirements: R2.4, R5.1, R6.2, R7.2, R13.1, R13.2, R13.4, R16.7 (partial — negative/boundary criteria R4.2/R4.3/R5.3/R7.5/R8.2 not exercised)_
 
   - [x] 17.2 Clean up and confirm zero residual resources
     - Terminated the MicroVM (TERMINATED), deleted the MicroVM image via API (DELETING), and ran `cdk destroy` (CsmvmStack destroyed). Verified 0 active MicroVMs and the stack gone. Removed local probe scripts and the gitignored runtime config.
