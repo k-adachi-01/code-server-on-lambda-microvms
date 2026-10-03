@@ -1,0 +1,6 @@
+# Kiro CLI local settings and runtime state (personal, not shared)
+.kiro/settings/
+
+# NOTE: the full project .gitignore (`.session/`, `.env*`, `cdk.out/`,
+# `node_modules/`, `csmvm.config.json`, `*.token`, `infra/cdk-outputs.json`)
+# is added in scaffold task 2.5. Merge this entry there.
