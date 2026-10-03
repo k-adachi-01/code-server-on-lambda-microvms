@@ -83,6 +83,14 @@ export default defineConfig({
         rules: {
           "typescript/no-explicit-any": "off",
           "no-restricted-imports": "off",
+          // Property-test titles are built by propertyTitle() so the suite maps
+          // 1:1 onto the numbered design properties (R16.5); the title is a
+          // deterministic string expression, not a literal. Property tests also
+          // assert inside fast-check predicates (guarded by the generated
+          // input), which the vitest plugin flags as "conditional expect".
+          // Both are intentional for this project's PBT convention.
+          "vitest/valid-title": "off",
+          "vitest/no-conditional-expect": "off",
         },
       },
     ],

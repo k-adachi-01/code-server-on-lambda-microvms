@@ -133,11 +133,12 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - _Requirements: R15.1_
 
 - [ ] 3. Core session model and status mapping
-  - [ ] 3.1 Define the core types in `src/core/session.ts`
+  - [~] 3.1 Define the core types in `src/core/session.ts`
     - `SessionState`, `REMOTE_BACKED`, `LOCAL_ONLY`, `IN_FLIGHT`, `RemoteStatus`, `Session`, `Ctx`, `Command`, `Event`, `RemoteObs`, `Effect`, `MUTATING`, `View`, `StepResult`, `NoticeCode`, and `AwsErrorInfo` (name, message, retryable), as in design.
+    - Partial (Lesson 4 slice): `SessionState`, `REMOTE_BACKED`, `LOCAL_ONLY`, `RemoteStatus`, and `REMOTE_STATUSES` are defined. The remaining types (`Session`, `Ctx`, `Command`, `Event`, `RemoteObs`, `Effect`, `MUTATING`, `View`, `StepResult`, `NoticeCode`, `AwsErrorInfo`, `IN_FLIGHT`) still land with the transition work.
     - _Requirements: R1.1, R1.6_
 
-  - [ ] 3.2 Implement `mapRemoteStatus` in `src/core/status-map.ts`
+  - [x] 3.2 Implement `mapRemoteStatus` in `src/core/status-map.ts`
     - A total mapping of the six known statuses. Every other string maps to `FAILED` with the raw value preserved.
     - _Requirements: R1.7_
 
@@ -145,9 +146,10 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - Remote-backed and local-only sets are disjoint and together cover all nine states. Each remote-backed state has a same-named Remote_Status.
     - _Requirements: R1.1_
 
-  - [ ] 3.4 Write the property test for status mapping
+  - [x] 3.4 Write the property test for status mapping
     - **Property 4: Remote status mapping is total**
     - **Validates: Requirements 1.7**
+    - Done: `test/core/status-map.property.test.ts` (Property 4). The PBT caught a real bug — inherited `Object.prototype` keys (e.g. `"valueOf"`) leaked through a plain-object lookup; fixed with an `Object.create(null)` table.
 
 - [ ] 4. Transition table: user commands
   - [ ] 4.1 Create the shared generators and the independent oracle
@@ -240,9 +242,10 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - _Requirements: R9.5, R12.6, R3.4_
 
 - [ ] 7. Config validation, run parameters, and retry policy
-  - [ ] 7.1 Implement `validateConfig` in `src/core/config.ts`
+  - [~] 7.1 Implement `validateConfig` in `src/core/config.ts`
     - Hand-written pure validation with no dependencies, producing `CliConfig` with the design defaults.
     - Bounds: `maximumDurationInSeconds` is an integer in 1–28800 (default 7200), capped at `B` if S8 found one. `suspendedDurationSeconds` is an integer in 1–28800 (upper bound unverified, tightened per S8), defaulting to the resolved `maximumDurationInSeconds`. `token.maxExpirationMinutes` is an integer in 1–60. Default `region` is `us-east-1`. Also validate ports, timeouts, retry parameters, and the optional `networkConnectorArns` list (absent by default).
+    - Done (Lesson 4 slice): `validateConfig` + `CliConfig`/`ConfigError` implemented with all the above bounds and defaults. S8-derived cap `B` not yet applied (Phase 0 unrun).
     - _Requirements: R4.10, R11.1, R11.2, R2.5, R2.8, R4.7, R12.1_
 
   - [ ] 7.2 Implement `buildRunParams` in `src/core/run-params.ts`
@@ -251,17 +254,19 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - `runHookPayload = {"sessionId"}`, at most 4096 bytes. `executionRoleArn` only when configured.
     - _Requirements: R2.1, R2.5, R2.8, R2.9, R11.1_
 
-  - [ ] 7.3 Implement `retryDelayMs` in `src/core/retry.ts`
+  - [x] 7.3 Implement `retryDelayMs` in `src/core/retry.ts`
     - Full jitter. `upper = min(capMs, baseMs * 2 ** attempt)`, `delay = floor(rand01 * upper)`. Also export `isRetryable(name)` for ThrottlingException and InternalServerException.
     - _Requirements: R12.1, R12.2_
 
-  - [ ] 7.4 Write the property test for retry delays
+  - [x] 7.4 Write the property test for retry delays
     - **Property 17: Retry delay bounds**
     - **Validates: Requirements 12.2**
+    - Done: `test/core/retry.property.test.ts` (Property 17): bounds + monotonicity in rand01 + `isRetryable` classification.
 
-  - [ ] 7.5 Write the property test for config bounds and run parameters
+  - [~] 7.5 Write the property test for config bounds and run parameters
     - **Property 16: Config bounds and run parameters** (includes the 7200 default, the `suspendedDurationSeconds` bound and default, all three idlePolicy fields, and no connectors by default)
     - **Validates: Requirements 2.5, 4.10, 11.1, 11.2**
+    - Partial: `test/core/config.property.test.ts` covers the config-bounds half (7200 default, `suspendedDurationSeconds` default+bound, token bound, no connectors by default, non-object rejection). The `idlePolicy`/run-params half is added with task 7.2 (`buildRunParams`).
 
   - [ ]* 7.6 Write unit tests for `buildRunParams`
     - The payload contains only `sessionId` and is at most 4096 bytes. No `networkConnectors` are passed by default; a configured override is passed exactly. `suspendedDurationSeconds` defaults to `maximumDurationInSeconds`. `executionRoleArn` is absent by default.
