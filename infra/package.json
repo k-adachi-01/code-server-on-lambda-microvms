@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "26.6.4",
+    "aws-cdk": "2.1144.0",
     "tsx": "4.23.15",
     "vite-plus": "1.0.0"
   }

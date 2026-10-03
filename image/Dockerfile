@@ -26,10 +26,12 @@ FROM public.ecr.aws/lambda/microvms:al2023-minimal AS runtime
 # Bump both together; re-check the hook handler against the bundled Node when
 # code-server is upgraded.
 ARG CODE_SERVER_VERSION=4.96.4
-ARG CODE_SERVER_SHA256=0000000000000000000000000000000000000000000000000000000000000000
+ARG CODE_SERVER_SHA256=8471a70ac790ce43c302c43451e45eb2cf000a927db5bb2c8a9899b72e32fff6
 
-# Runtime packages (git, curl, tini) come from the AL2023 base / pinned repos.
-RUN dnf install -y git curl tar gzip shadow-utils nodejs && dnf clean all
+# Runtime packages. curl is already present as curl-minimal in the AL2023
+# base image, so it is not reinstalled here (that caused a curl/curl-minimal
+# conflict). The base uses microdnf, which has a limited flag set.
+RUN dnf install -y git tar gzip shadow-utils nodejs && dnf clean all
 
 # Download and verify code-server, then install it.
 RUN curl -fsSL -o /tmp/code-server.tar.gz \
