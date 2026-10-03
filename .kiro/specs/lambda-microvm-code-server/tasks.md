@@ -15,7 +15,7 @@ The implementation is TypeScript throughout (CLI, Hook_Handler, CDK). Work proce
 
 Phase 0 runs early. Tasks that only touch pure core or local tooling (scaffold, `src/core/`, State store, redaction) do not depend on spike results and can run in parallel with it. Tasks that depend on a spike result say so in their bullets: adapter field names, error classification, hook contract, IAM statements, and the duration cap.
 
-Every Phase 0 task, and the final ENV task, is gated. It **requires explicit user confirmation before any AWS call that creates or deletes resources** (including `cdk bootstrap`, `cdk deploy`, `cdk destroy`, RunMicrovm, and TerminateMicrovm). Phase 0 runs in `us-east-1`. Phase 0 budget (user-confirmed): at most 3 concurrent MicroVMs, each with `maximumDurationInSeconds = 1800`. Before each costly spike, present a cost estimate based on the Lambda MicroVMs pricing page (compute time, snapshot storage, image build) and get approval for that spike; spikes are approved one at a time. Spike scripts never print Auth_Token values. Each spike records its result in `docs/phase0-findings.md` and updates the affected A-n / Q-n status and R-n criteria in `requirements.md`.
+Every Phase 0 task, and the final ENV task, is gated. It **requires explicit user confirmation before any AWS call that creates or deletes resources** (including `cdk bootstrap`, `cdk deploy`, `cdk destroy`, RunMicrovm, and TerminateMicrovm). Phase 0 runs in `ap-northeast-1`. Phase 0 budget (user-confirmed): at most 3 concurrent MicroVMs, each with `maximumDurationInSeconds = 1800`. Before each costly spike, present a cost estimate based on the Lambda MicroVMs pricing page (compute time, snapshot storage, image build) and get approval for that spike; spikes are approved one at a time. Spike scripts never print Auth_Token values. Each spike records its result in `docs/phase0-findings.md` and updates the affected A-n / Q-n status and R-n criteria in `requirements.md`.
 
 ## Tasks
 
@@ -30,7 +30,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 
   - [ ] 1.2 S1: Verify the image build pipeline and snapshot restore (A-12, A-14)
     - Requires explicit user confirmation before any AWS call that creates or deletes resources. Record the result in `docs/phase0-findings.md` and update the affected A-n / R-n.
-    - Run `cdk bootstrap` only if `us-east-1` is not bootstrapped (confirmed). Review `cdk diff`, then deploy the spike stack in `us-east-1` with manual approval. The spike Dockerfile uses `public.ecr.aws/lambda/microvms:al2023-minimal`, the Image uses `minimumMemoryInMiB: 2048`, and the build role gets only `s3:GetObject` at first.
+    - Run `cdk bootstrap` only if `ap-northeast-1` is not bootstrapped (confirmed). Review `cdk diff`, then deploy the spike stack in `ap-northeast-1` with manual approval. The spike Dockerfile uses `public.ecr.aws/lambda/microvms:al2023-minimal`, the Image uses `minimumMemoryInMiB: 2048`, and the build role gets only `s3:GetObject` at first.
     - Start code-server during the build so it is captured in the snapshot. Run one MicroVM and confirm code-server works after restore (A-14); record whether any per-VM value must be restored in the `/run` hook.
     - Record the hook port, path prefix, and timing contract, and any extra build-role permissions (KMS, logs).
     - If hooks share the Code_Server_Port, apply the R13.1 front-process amendment.
@@ -120,7 +120,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - Add `.gitignore` covering `.session/`, `.env*`, `cdk.out/`, `node_modules/`, `csmvm.config.json`, `*.token`, and `infra/cdk-outputs.json`.
     - Add `.gitleaks.toml`.
     - Add `.vite-hooks/pre-commit`, which runs `gitleaks protect --staged --config .gitleaks.toml` and then `vp staged` (Oxlint/Oxfmt on staged files). The user enables it with `vp hooks enable`; the agent does not change git config and does not add Husky or another hook manager. Enabling is documented in the README (task 15.2).
-    - Add `csmvm.config.example.json` with placeholder values only (`region: "us-east-1"`, `maximumDurationInSeconds: 7200`, no `networkConnectorArns`).
+    - Add `csmvm.config.example.json` with placeholder values only (`region: "ap-northeast-1"`, `maximumDurationInSeconds: 7200`, no `networkConnectorArns`).
     - Add `.github/workflows/ci.yml`: install Nix with `DeterminateSystems/determinate-nix-action` pinned by commit SHA, run on `ubuntu-24.04` (no macOS matrix), and inside `nix develop --command` run `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test`, `pnpm audit --audit-level=high` (fail on high or above; individually ignore only confirmed non-applicable advisories), and `gitleaks detect --config .gitleaks.toml`. Note the project CI policy in a comment.
     - _Requirements: R15.1, R15.2, R15.3_
 
@@ -244,7 +244,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 - [ ] 7. Config validation, run parameters, and retry policy
   - [~] 7.1 Implement `validateConfig` in `src/core/config.ts`
     - Hand-written pure validation with no dependencies, producing `CliConfig` with the design defaults.
-    - Bounds: `maximumDurationInSeconds` is an integer in 1–28800 (default 7200), capped at `B` if S8 found one. `suspendedDurationSeconds` is an integer in 1–28800 (upper bound unverified, tightened per S8), defaulting to the resolved `maximumDurationInSeconds`. `token.maxExpirationMinutes` is an integer in 1–60. Default `region` is `us-east-1`. Also validate ports, timeouts, retry parameters, and the optional `networkConnectorArns` list (absent by default).
+    - Bounds: `maximumDurationInSeconds` is an integer in 1–28800 (default 7200), capped at `B` if S8 found one. `suspendedDurationSeconds` is an integer in 1–28800 (upper bound unverified, tightened per S8), defaulting to the resolved `maximumDurationInSeconds`. `token.maxExpirationMinutes` is an integer in 1–60. Default `region` is `ap-northeast-1`. Also validate ports, timeouts, retry parameters, and the optional `networkConnectorArns` list (absent by default).
     - Done (Lesson 4 slice): `validateConfig` + `CliConfig`/`ConfigError` implemented with all the above bounds and defaults. S8-derived cap `B` not yet applied (Phase 0 unrun).
     - _Requirements: R4.10, R11.1, R11.2, R2.5, R2.8, R4.7, R12.1_
 
@@ -407,7 +407,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - _Requirements: R13.2, R13.3_
 
   - [ ] 13.3 Write the Dockerfile, `entrypoint.sh`, and workspace seed
-    - Multi-stage build: compile the hooks, then a runtime stage `FROM public.ecr.aws/lambda/microvms:al2023-minimal` (verified base, A-12; base image ARN form `arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1`).
+    - Multi-stage build: compile the hooks, then a runtime stage `FROM public.ecr.aws/lambda/microvms:al2023-minimal` (verified base, A-12; base image ARN form `arn:aws:lambda:<region>:aws:microvm-image:al2023-1`, region-derived and confirmed in S1).
     - code-server from the release tarball at exact `ARG CODE_SERVER_VERSION` with a pinned SHA-256. The hook handler runs on the Node bundled with code-server; verify and record that Node version at build time. Runtime packages git, curl, tini come from the AL2023 base image / pinned repositories (no individual exact pin). Non-root `coder` user, empty `workspace-seed/`.
     - The entrypoint starts the Hook_Handler and runs `code-server --auth none --bind-addr 0.0.0.0:8080 --disable-telemetry /home/coder/workspace` under tini during the image build, so the running process is captured in the snapshot. If S3 required the password fallback, use that instead, with the password set per VM at run time.
     - Generate no secret and no per-user unique value at build time (no password, session secret, or keys).
@@ -425,7 +425,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 
   - [ ] 14.2 Implement the build context, Image_Build_Role, and Image in `infra/lib/stack.ts`
     - S3 asset of `../image`. A build role trusted only by `lambda.amazonaws.com` with `aws:SourceAccount`, granted `s3:GetObject` on the asset object only, plus extra statements only if S1 required them.
-    - `CfnMicrovmImage` in `us-east-1` on base image `arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1`, with hook timeouts and resources `minimumMemoryInMiB: 2048` (2 GB / 1 vCPU baseline, peaks up to 4x automatically). Outputs: ImageArn, Region, and OperatorPolicyArn.
+    - `CfnMicrovmImage` in `ap-northeast-1` on base image `arn:aws:lambda:<region>:aws:microvm-image:al2023-1` (region-derived, confirmed in S1), with hook timeouts and resources `minimumMemoryInMiB: 2048` (2 GB / 1 vCPU baseline, peaks up to 4x automatically). Outputs: ImageArn, Region, and OperatorPolicyArn.
     - _Requirements: R14.1, R14.6, R13.2, R13.4_
 
   - [ ] 14.3 Implement the Operator_Policy and the optional Execution_Role

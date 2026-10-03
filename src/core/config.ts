@@ -4,7 +4,7 @@
 // only in the shell's state store, never here.
 //
 // Bounds (design "Pure helpers" + task 7.1):
-//   region                     : non-empty string, default "us-east-1"
+//   region                     : non-empty string, default "ap-northeast-1"
 //   imageArn                   : required non-empty string (no default)
 //   maximumDurationInSeconds   : integer in [1, 28800], default 7200
 //   suspendedDurationSeconds   : integer in [1, 28800], default = resolved max
@@ -137,7 +137,7 @@ export function validateConfig(raw: unknown): ValidateResult {
     errors.push({ path: "retry", message: "must be an object" });
   }
 
-  const region = nonEmptyString(pick(raw, "region"), "region", "us-east-1");
+  const region = nonEmptyString(pick(raw, "region"), "region", "ap-northeast-1");
   const imageArn = nonEmptyString(pick(raw, "imageArn"), "imageArn");
 
   const maximumDurationInSeconds = intInRange(

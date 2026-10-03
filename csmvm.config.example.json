@@ -1,6 +1,6 @@
 {
-  "region": "us-east-1",
-  "imageArn": "arn:aws:lambda:us-east-1:000000000000:microvm-image:REPLACE_ME",
+  "region": "ap-northeast-1",
+  "imageArn": "arn:aws:lambda:ap-northeast-1:000000000000:microvm-image:REPLACE_ME",
   "maximumDurationInSeconds": 7200,
   "suspendedDurationSeconds": 7200,
   "codeServerPort": 8080,

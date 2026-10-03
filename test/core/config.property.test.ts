@@ -10,7 +10,7 @@ import { pbtParams, propertyTitle } from "../support/pbt.js";
 // bound, and that no network connectors are present by default. (buildRunParams
 // lands with task 7.2; its idlePolicy assertions are added there.)
 
-const VALID_IMAGE_ARN = "arn:aws:lambda:us-east-1:123456789012:microvm-image:example";
+const VALID_IMAGE_ARN = "arn:aws:lambda:ap-northeast-1:123456789012:microvm-image:example";
 
 describe(propertyTitle(16, "Config bounds and run parameters"), () => {
   it("applies defaults when optional fields are omitted", () => {
@@ -18,7 +18,7 @@ describe(propertyTitle(16, "Config bounds and run parameters"), () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const c = res.config;
-    expect(c.region).toBe("us-east-1");
+    expect(c.region).toBe("ap-northeast-1");
     expect(c.maximumDurationInSeconds).toBe(7200);
     // suspendedDurationSeconds defaults to the resolved maximumDurationInSeconds.
     expect(c.suspendedDurationSeconds).toBe(7200);

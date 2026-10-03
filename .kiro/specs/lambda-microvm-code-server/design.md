@@ -16,7 +16,7 @@ Facts about AWS behavior come from the requirements "Assumptions and Open Questi
 | ID | Resolution | Override |
 |---|---|---|
 | Q-1 | Resolved (user-confirmed), enabled by default. The Auth_Proxy requires a per-connect secret. `connect` prints a one-time login URL (`/__csmvm/login?k=<secret>`). The first use swaps the secret for an `HttpOnly; SameSite=Strict` session cookie and then invalidates it. The proxy also checks the `Host` and `Origin` headers. | `proxy.localAuth: false` brings back the plain localhost behavior. A warning is printed. |
-| Q-2 | Resolved (user-confirmed): Region `us-east-1`. Region and Image ARN live in `csmvm.config.json` (gitignored). The `config import` subcommand fills them from `infra/cdk-outputs.json` (`cdk deploy --outputs-file`). | Edit the config file by hand. |
+| Q-2 | Resolved (user-confirmed): Region `ap-northeast-1`. Region and Image ARN live in `csmvm.config.json` (gitignored). The `config import` subcommand fills them from `infra/cdk-outputs.json` (`cdk deploy --outputs-file`). | Edit the config file by hand. |
 | Q-3 | Resolved (user-confirmed): pass no network connectors by default and rely on the service defaults (outbound internet works by default). S2 checks whether the ingress connector (`ALL_INGRESS`) must be passed for the endpoint; if so, the default becomes the ingress connector only. | Optional config `networkConnectorArns` (passed exactly as configured). |
 | Q-4 | No Execution_Role. RunMicrovm is called without `executionRoleArn` unless Phase 0 shows it is required. | CDK context `withExecutionRole=true` adds the role and an `iam:PassRole` statement. The CLI reads `executionRoleArn` from config. |
 | Q-5 | The workspace starts empty. code-server opens `/home/coder/workspace`, an empty directory. | Add files under `image/workspace-seed/`. |
@@ -325,7 +325,7 @@ Exit codes: 0 for success, user cancel, or already terminated. 1 for AWS or runt
 
 ### Image (`image/`)
 
-- `Dockerfile`, multi-stage. The build stage compiles `image/hooks` (TypeScript). The runtime stage is `FROM public.ecr.aws/lambda/microvms:al2023-minimal` (verified base container, A-12); the Image is based on the base image ARN form `arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1`. It installs code-server from the release tarball at an exact version, `ARG CODE_SERVER_VERSION=<x.y.z>`, and checks a pinned SHA-256 (R13.6). Runtime packages are git, curl, and tini. It runs as a non-root `coder` user, and the workspace directory is empty (Q-5).
+- `Dockerfile`, multi-stage. The build stage compiles `image/hooks` (TypeScript). The runtime stage is `FROM public.ecr.aws/lambda/microvms:al2023-minimal` (verified base container, A-12); the Image is based on the base image ARN form `arn:aws:lambda:<region>:aws:microvm-image:al2023-1` (region-derived; discovered via ListManagedMicrovmImages and confirmed in Phase 0 S1). It installs code-server from the release tarball at an exact version, `ARG CODE_SERVER_VERSION=<x.y.z>`, and checks a pinned SHA-256 (R13.6). Runtime packages are git, curl, and tini. It runs as a non-root `coder` user, and the workspace directory is empty (Q-5).
 - `entrypoint.sh`: starts code-server under tini with `code-server --auth none --bind-addr 0.0.0.0:8080 --disable-telemetry /home/coder/workspace` (R5.4, R13.1). It also starts the Hook_Handler. `--auth none` stays only because S3 (task 1.4) must confirm endpoint JWE enforcement before any image task.
 - Snapshot model (A-14): code-server is started during the Image build, so the running process is captured in the Firecracker snapshot and every MicroVM resumes from it. Anything generated at build time (random seeds, IDs, code-server internal state) is shared by all MicroVMs. Therefore the Image holds no secret and no per-user unique value generated at build time (R13.5, R13.7): no code-server password, no session secret, no keys. S1 verifies that code-server works after restore.
 - Hook_Handler (Node, about 100 lines):
@@ -349,7 +349,9 @@ class CodeServerMicrovmStack extends Stack {
   // + kms:Decrypt on the bootstrap key only if the asset bucket uses a CMK (Phase 0 / A-12)
   // 3. Image (L1). Property names follow the AWS::Lambda::MicrovmImage schema at implementation time.
   const image = new lambda.CfnMicrovmImage(this, "Image", {
-    /* name, base image arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1, build context S3 location,
+    /* name, base image arn:aws:lambda:<region>:aws:microvm-image:al2023-1 (region-derived;
+       the exact managed base image ARN is discovered via ListManagedMicrovmImages and confirmed
+       in Phase 0 S1), build context S3 location,
        buildRoleArn, hook timeouts, resources: { minimumMemoryInMiB: 2048 }  // 2 GB / 1 vCPU baseline, peaks up to 4x (A-12) */
   });
   // 4. Operator policy (managed policy; the user attaches it to their own SSO role)
@@ -375,7 +377,7 @@ The project scripts are `infra:diff`, `infra:deploy`, and `infra:destroy`. None 
   "inFlightSince": "2026-…Z",        // required iff state ∈ In_Flight_States
   "lastReconciledAt": "2026-…Z",
   "rawRemoteStatus": "PENDING",      // or null
-  "region": "us-east-1"
+  "region": "ap-northeast-1"
 }
 ```
 
@@ -387,7 +389,7 @@ Note on R9.7: the token is also kept in the C6/C7b case (TERMINATING with no ID)
 
 ```ts
 interface CliConfig {
-  region: string;                                  // example/default "us-east-1" (Q-2)
+  region: string;                                  // example/default "ap-northeast-1" (Q-2)
   imageArn: string; executionRoleArn?: string;
   maximumDurationInSeconds: number;               // int 1..28800, default 7200
   suspendedDurationSeconds: number;               // int 1..28800 (upper bound unverified, A-15), default = maximumDurationInSeconds
@@ -712,11 +714,11 @@ The final cleanup check is that `status` shows no strays and the `cdk destroy` s
 
 ## Phase 0: Real-Environment Spike
 
-The spike runs before the implementation tasks that depend on its results. It uses throwaway scripts in `spike/` (tsx and the SDK), deletes them afterward, and records results in `docs/phase0-findings.md`. The A-n statuses in requirements.md are updated from those results. Region: `us-east-1` (Q-2). Budget (user-confirmed): at most 3 MicroVMs at a time, each with `maximumDurationInSeconds = 1800`. Before each costly spike, a cost estimate based on the Lambda MicroVMs pricing page (compute time, snapshot storage, image build) is presented and the user approves spikes one at a time. Wall-clock time should be under 2 hours.
+The spike runs before the implementation tasks that depend on its results. It uses throwaway scripts in `spike/` (tsx and the SDK), deletes them afterward, and records results in `docs/phase0-findings.md`. The A-n statuses in requirements.md are updated from those results. Region: `ap-northeast-1` (Q-2). Budget (user-confirmed): at most 3 MicroVMs at a time, each with `maximumDurationInSeconds = 1800`. Before each costly spike, a cost estimate based on the Lambda MicroVMs pricing page (compute time, snapshot storage, image build) is presented and the user approves spikes one at a time. Wall-clock time should be under 2 hours.
 
 | # | Item | Experiment | Result → impact |
 |---|---|---|---|
-| S1 | A-12 build, A-14 snapshot | Deploy a minimal stack in `us-east-1` with a tiny Dockerfile on `public.ecr.aws/lambda/microvms:al2023-minimal`, `minimumMemoryInMiB: 2048`, and a hook stub that logs every request (method, path, port). The stub starts code-server at build time. First give the build role only `s3:GetObject`. Run a MicroVM from the Image and check that code-server works after restore from the snapshot. | Records the hook port, path, and timing contract, and whether the build role needs KMS or logs permissions. Shared hook port → in-VM front process (R13.1 note). Extra permissions → R14.6 statement list. code-server broken after restore, or a per-VM value must differ → `run` restores it before the health check (A-14). |
+| S1 | A-12 build, A-14 snapshot | Deploy a minimal stack in `ap-northeast-1` with a tiny Dockerfile on `public.ecr.aws/lambda/microvms:al2023-minimal`, `minimumMemoryInMiB: 2048`, and a hook stub that logs every request (method, path, port). The stub starts code-server at build time. First give the build role only `s3:GetObject`. Run a MicroVM from the Image and check that code-server works after restore from the snapshot. | Records the hook port, path, and timing contract, and whether the build role needs KMS or logs permissions. Shared hook port → in-VM front process (R13.1 note). Extra permissions → R14.6 statement list. code-server broken after restore, or a per-VM value must differ → `run` restores it before the health check (A-14). |
 | S2 | Network connectors, PassNetworkConnector, Q-4 | Run with the Operator_Policy without `PassNetworkConnector`, without `executionRoleArn`, and with no network connectors. Check that the endpoint is reachable and outbound internet works. | Endpoint reachable → no connectors by default (R2.8). Endpoint unreachable → pass only `ALL_INGRESS` by default and retry; AccessDenied naming `PassNetworkConnector` → add that statement (R14.2, R14.3). Execution role required → Q-4 override becomes the default (R14.4 active). |
 | S3 | A-4 | `curl` the endpoint with no token, a malformed token, and a token for the wrong port. | All rejected → R5.4 stands. Any unauthenticated 2xx → stop and switch to the code-server password fallback (R5.4 revised). |
 | S4 | A-9 | Run a prototype proxy against code-server: workbench, service worker, extensions view, terminal, and a WebSocket left idle for at least 15 min. | Idle drops → add a WebSocket ping keepalive (config). Path or asset problems → add rewrite rules (R5.1, R5.3). |
