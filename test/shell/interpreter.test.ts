@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCommand } from "../../src/shell/interpreter.js";
+import { runCommand, terminateStray } from "../../src/shell/interpreter.js";
 import type { InterpreterDeps } from "../../src/shell/interpreter.js";
 import { StateStore } from "../../src/shell/state-store.js";
 import { Redactor, RedactingLogger } from "../../src/shell/redact.js";
@@ -161,5 +161,35 @@ describe("runCommand", () => {
     const h = harness({ fake, assumeYes: true });
     const res = await runCommand("launch", h.deps);
     expect(res.session.state).not.toBe("RUNNING");
+  });
+});
+
+describe("terminateStray", () => {
+  it("rejects a stray id that is not on the image (exit 2, no terminate)", async () => {
+    const fake = new FakeMicrovms();
+    const h = harness({ fake, assumeYes: true });
+    const res = await terminateStray("mvm-not-here", h.deps);
+    expect(res.exitCode).toBe(2);
+    expect(h.fake.countOf("terminate")).toBe(0);
+  });
+
+  it("terminates a listed stray id and does not touch the session", async () => {
+    const fake = new FakeMicrovms();
+    const strayId = fake.seed("RUNNING");
+    const h = harness({ fake, assumeYes: true });
+    const res = await terminateStray(strayId, h.deps);
+    expect(res.exitCode).toBe(0);
+    expect(h.fake.calls.some((c) => c.method === "terminate" && c.args === strayId)).toBe(true);
+    // No session state file was created for a stray-only operation.
+    expect(h.store.read().kind).toBe("absent");
+  });
+
+  it("non-TTY without --yes refuses (exit 2)", async () => {
+    const fake = new FakeMicrovms();
+    const strayId = fake.seed("RUNNING");
+    const h = harness({ fake, isTTY: false, assumeYes: false });
+    const res = await terminateStray(strayId, h.deps);
+    expect(res.exitCode).toBe(2);
+    expect(h.fake.countOf("terminate")).toBe(0);
   });
 });

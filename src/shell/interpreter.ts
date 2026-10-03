@@ -25,7 +25,7 @@ import { isRetryable } from "../core/retry.js";
 import type { StateStore } from "./state-store.js";
 import { confirm } from "./prompt.js";
 import { probeReadiness } from "./readiness.js";
-import type { Redactor, RedactingLogger } from "./redact.js";
+import { formatAwsError, type Redactor, type RedactingLogger } from "./redact.js";
 
 export interface InterpreterDeps {
   config: unknown; // raw config object (validated here)
@@ -365,4 +365,58 @@ function noneSession(): Session {
     rawRemoteStatus: null,
     region: "ap-northeast-1",
   };
+}
+
+/**
+ * Terminate a stray MicroVM by id (R8.7). Verifies the id is in listByImage,
+ * confirms with the user, terminates it, and does NOT touch the Session. The
+ * stray must not be the session's own bound microvm.
+ */
+export async function terminateStray(strayId: string, deps: InterpreterDeps): Promise<RunResult> {
+  const validated = validateConfig(deps.config);
+  if (!validated.ok) {
+    for (const e of validated.errors) deps.logger.error(`config: ${e.path} ${e.message}`);
+    return { exitCode: 2, session: noneSession() };
+  }
+  const cfg = validated.config;
+
+  const list = await deps.port.listByImage(cfg.imageArn);
+  if (!list.some((m) => m.microvmId === strayId)) {
+    deps.logger.error(`stray ${strayId} is not a MicroVM on image ${cfg.imageArn}`);
+    return { exitCode: 2, session: noneSession() };
+  }
+
+  if (!deps.isTTY && !deps.assumeYes) {
+    deps.logger.error(
+      `terminate --stray requires confirmation; pass --yes in a non-interactive shell`,
+    );
+    return { exitCode: 2, session: noneSession() };
+  }
+  const approved = await confirm(
+    `Terminate stray MicroVM ${strayId}? Unsaved state will be lost.`,
+    {
+      isTTY: deps.isTTY,
+      assumeYes: deps.assumeYes,
+      ...(deps.ask ? { ask: deps.ask } : {}),
+    },
+  );
+  if (!approved) {
+    deps.logger.log("cancelled");
+    return { exitCode: 0, session: noneSession() };
+  }
+
+  try {
+    await deps.port.terminate(strayId);
+    deps.logger.log(`terminated stray ${strayId}`);
+    return { exitCode: 0, session: noneSession() };
+  } catch (err) {
+    deps.logger.error(
+      formatAwsError({
+        operation: "TerminateMicrovm",
+        errorName: awsErrorName(err),
+        microvmId: strayId,
+      }),
+    );
+    return { exitCode: 1, session: noneSession() };
+  }
 }

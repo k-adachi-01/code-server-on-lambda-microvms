@@ -81,8 +81,11 @@ describe(propertyTitle(6, "One MicroVM per Session for its whole life"), () => {
         const before = view.session.microvmId;
         const res = step(view, ev, ctx);
         const after = res.session.microvmId;
-        if (before !== null) {
-          // An existing id is never changed (it may be carried unchanged).
+        // `launch` deliberately starts a NEW session (new sessionId), so the old
+        // microvmId does not carry over — that is relaunch (P7), not a rebind.
+        const isLaunch = ev.type === "Command" && ev.cmd === "launch";
+        if (before !== null && !isLaunch) {
+          // Within the same session, an existing id is never changed.
           expect(after).toBe(before);
         }
       }),
