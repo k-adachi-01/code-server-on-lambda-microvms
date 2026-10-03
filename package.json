@@ -13,7 +13,9 @@
     "fmt": "vp fmt",
     "test": "vp test",
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json",
+    "hygiene": "node scripts/hygiene.mjs --full",
+    "hygiene:staged": "node scripts/hygiene.mjs --staged"
   },
   "dependencies": {
     "@aws-sdk/client-lambda-microvms": "3.1146.0",

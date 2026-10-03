@@ -20,11 +20,11 @@
           # flake.lock; run `node --version`, `pnpm --version`, `cdk --version`,
           # and `gitleaks version` after `nix develop` to see the resolved pins.
           packages = [
-            pkgs.nodejs_22      # Node.js 22 LTS (satisfies Vitest 5 / Node >= 22.12)
-            pkgs.pnpm           # pnpm (owns deps, lockfile, workspace)
-            pkgs.awscli2        # aws CLI (used by infra/ and spike workflows)
-            pkgs.aws-cdk        # AWS CDK CLI (infra/ uses this binary; libs come from pnpm)
-            pkgs.gitleaks       # secret scanner (pre-commit + CI)
+            pkgs.nodejs_22            # Node.js 22 LTS (satisfies Vitest 5 / Node >= 22.12)
+            pkgs.pnpm                 # pnpm (owns deps, lockfile, workspace)
+            pkgs.awscli2              # aws CLI (used by infra/ and spike workflows)
+            pkgs.nodePackages.aws-cdk # AWS CDK CLI v2 (infra/ uses this binary; libs come from pnpm)
+            pkgs.gitleaks             # secret scanner (pre-commit + CI)
           ];
 
           shellHook = ''

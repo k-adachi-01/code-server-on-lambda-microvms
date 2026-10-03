@@ -10,6 +10,9 @@
 #   - `pnpm audit --audit-level=high` must pass; ignore only confirmed
 #     non-applicable advisories individually (do not lower the level).
 #   - gitleaks runs with the same config as the local pre-commit hook.
+#   - A separate repo-hygiene check (`pnpm hygiene`) fails on personal-environment
+#     values (AWS account ids, SSO URLs, local user paths, denylisted profile
+#     names). It is distinct from gitleaks, which stays scoped to secrets.
 name: CI
 
 on:
@@ -47,6 +50,9 @@ jobs:
 
       - name: Test
         run: nix develop --command pnpm test
+
+      - name: Repo hygiene (personal-environment values; separate from secrets)
+        run: nix develop --command pnpm hygiene
 
       - name: Audit dependencies
         run: nix develop --command pnpm audit --audit-level=high

@@ -40,8 +40,17 @@ Do **not** use Vite+'s runtime or package-manager management: no `vp env`, `vp i
 
 ## Git hooks
 
-- The pre-commit hook is `.vite-hooks/pre-commit`; it runs `gitleaks protect --staged` then `vp staged`. The user enables it with `vp hooks enable`.
+- The pre-commit hook is `.vite-hooks/pre-commit`; it runs `gitleaks protect --staged`, then the repo-hygiene check (`node scripts/hygiene.mjs --staged`), then `vp staged`. The user enables it with `vp hooks enable`.
 - Never change git config. Do not add Husky or any other hook manager.
+
+## Repository hygiene (public repo)
+
+This repo is a public submission. Keep personal-environment values out of it, separate from secrets:
+
+- **gitleaks = credentials/secrets only.** `.gitleaks.toml` detects tokens, keys, and other secrets. Do not add account-id / SSO-URL / profile-name / local-path rules to it.
+- **A separate repo-hygiene check** (`scripts/hygiene.mjs`, exposed as `pnpm hygiene` for the full tree and `pnpm hygiene:staged` for staged changes) fails the pre-commit hook and CI on personal-environment values: AWS account ids (standalone and inside ARNs), AWS SSO start/portal URLs, local user paths (`/Users/<name>/`, `/home/<name>/`), and personal AWS profile names. Detection is by generic pattern — no real account id, SSO URL, username, or profile name is hardcoded. Obvious placeholders (`123456789012`, `/Users/<user>/`, `example.com`) are allowed. Profile-name detection uses a denylist that is **empty by default** in the committed check and is populated locally via the `CSMVM_HYGIENE_PROFILES` env var or a gitignored `.hygiene-profiles.local` file (one name per line) — so no real names ever enter the repo.
+- **The public CDK must stay PoC-Sandbox-agnostic.** Committed `infra/` code must not embed sandbox specifics: `auto_delete` / `expires_at` lifecycle and sandbox tags are supplied by external deploy operations, not by committed code.
+- **Kiro hooks are optional early-detection aids, not required guards.** The pre-commit hook and CI hygiene step are the authoritative guards.
 
 ## CI
 

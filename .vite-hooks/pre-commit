@@ -11,5 +11,10 @@ set -eu
 # 1. Secret scan of staged changes. Blocks the commit if a secret is detected.
 gitleaks protect --staged --config .gitleaks.toml
 
-# 2. Lint/format staged files per the `staged` block in vite.config.ts.
+# 2. Repo-hygiene scan of staged changes. Separate from gitleaks: blocks the
+#    commit on personal-environment values (AWS account ids, SSO URLs, local
+#    user paths, denylisted profile names), detected by generic pattern.
+node scripts/hygiene.mjs --staged
+
+# 3. Lint/format staged files per the `staged` block in vite.config.ts.
 vp staged
