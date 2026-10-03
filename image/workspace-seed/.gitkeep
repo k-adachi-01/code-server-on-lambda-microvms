@@ -1,0 +1,2 @@
+# The workspace starts empty (Q-5). This file keeps the directory in git; it is
+# copied into /home/coder/workspace at image build time.

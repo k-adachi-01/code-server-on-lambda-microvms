@@ -37,6 +37,9 @@ export default defineConfig({
 
   lint: {
     plugins: ["typescript", "vitest"],
+    // image/hooks is a separate workspace package with its own build (vp pack)
+    // and its own tsconfig; the root lint toolchain does not type-check it.
+    ignorePatterns: ["dist/**", "cdk.out/**", "image/**", "infra/cdk.out/**"],
     options: {
       // Full type-aware linting, as recommended by the Vite+ lint guide.
       typeAware: true,

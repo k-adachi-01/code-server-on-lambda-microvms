@@ -1,0 +1,14 @@
+{
+  "name": "@csmvm/hooks",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Lambda MicroVMs lifecycle hook handler, bundled to a single file for the image.",
+  "type": "module",
+  "scripts": {
+    "build": "vp pack src/handler.ts --out dist"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "vite-plus": "1.0.0"
+  }
+}
