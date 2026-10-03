@@ -26,6 +26,7 @@ export const MAX_DURATION_SECONDS = 28_800;
 export interface CliConfig {
   region: string;
   imageArn: string;
+  executionRoleArn?: string;
   maximumDurationInSeconds: number;
   suspendedDurationSeconds: number;
   codeServerPort: number;
@@ -237,6 +238,17 @@ export function validateConfig(raw: unknown): ValidateResult {
     }
   }
 
+  // Optional execution role (Q-4): absent by default; a non-empty string when set.
+  let executionRoleArn: string | undefined;
+  const execRaw = pick(raw, "executionRoleArn");
+  if (execRaw !== undefined) {
+    if (typeof execRaw !== "string" || execRaw.length === 0) {
+      errors.push({ path: "executionRoleArn", message: "must be a non-empty string" });
+    } else {
+      executionRoleArn = execRaw;
+    }
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -253,6 +265,7 @@ export function validateConfig(raw: unknown): ValidateResult {
     retry: { maxAttempts, baseMs, capMs },
     pollIntervalSeconds,
     ...(networkConnectorArns !== undefined ? { networkConnectorArns } : {}),
+    ...(executionRoleArn !== undefined ? { executionRoleArn } : {}),
   };
   return { ok: true, config };
 }

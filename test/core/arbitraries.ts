@@ -9,6 +9,8 @@ import type {
   Command,
   Ctx,
   Event,
+  FileRead,
+  ReconcileInput,
   RemoteObs,
   Session,
   SessionState,
@@ -167,3 +169,19 @@ export const event = (): fc.Arbitrary<Event> =>
   );
 
 export { ALL_STATES, IN_FLIGHT_STATES };
+
+// --- Reconcile input arbitraries --------------------------------------------
+
+export const fileRead = (): fc.Arbitrary<FileRead> =>
+  fc.oneof(
+    fc.constant<FileRead>({ kind: "absent" }),
+    fc.constant<FileRead>({ kind: "corrupt" }),
+    anySession().map((session): FileRead => ({ kind: "valid", session })),
+  );
+
+export const reconcileInput = (): fc.Arbitrary<ReconcileInput> =>
+  fc.record({
+    file: fileRead(),
+    get: remoteObs(),
+    list: strays(),
+  });

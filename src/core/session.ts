@@ -181,3 +181,22 @@ export type StepResult =
       session: Session;
       effects: [];
     };
+
+/** The outcome of reading the State_File from disk. */
+export type FileRead =
+  | { kind: "absent" }
+  | { kind: "corrupt" }
+  | { kind: "valid"; session: Session };
+
+/** Inputs the reconciler needs: the file, the GetMicrovm result, and the list. */
+export interface ReconcileInput {
+  file: FileRead;
+  get: RemoteObs;
+  list: Stray[];
+}
+
+/** The reconciler returns the reconciled view plus any recovery/notice effects. */
+export interface ReconcileResult {
+  view: View;
+  effects: Effect[];
+}
