@@ -38,6 +38,8 @@ export interface FakeOptions {
   notFoundFor?: number;
   /** Endpoint returned by get() once visible. */
   endpoint?: string;
+  /** Clock for token expiry (defaults to Date.now); injectable for cache tests. */
+  now?: () => number;
 }
 
 export class FakeMicrovms implements MicrovmsPort {
@@ -148,7 +150,11 @@ export class FakeMicrovms implements MicrovmsPort {
   ): Promise<{ token: string; expiresAt: number }> {
     this.calls.push({ method: "createAuthToken", args: { id, port, minutes } });
     this.maybeThrow("createAuthToken");
-    return { token: `fake-token-${id}-${port}`, expiresAt: Date.now() + minutes * 60_000 };
+    const base = this.opts.now ? this.opts.now() : Date.now();
+    return {
+      token: `fake-token-${id}-${port}-${this.calls.length}`,
+      expiresAt: base + minutes * 60_000,
+    };
   }
 
   /** Count of calls to a given method. */

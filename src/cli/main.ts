@@ -6,6 +6,7 @@
 import { Command } from "commander";
 import { buildDeps } from "./deps.js";
 import { configImport } from "./config-import.js";
+import { connectCommand } from "./connect.js";
 import { runCommand, terminateStray } from "../shell/interpreter.js";
 
 async function main(): Promise<number> {
@@ -62,12 +63,8 @@ async function main(): Promise<number> {
   program
     .command("connect")
     .description("Run the localhost Auth_Proxy and print a one-time login URL")
-    .action(() => {
-      // The Auth_Proxy ships in a dedicated module (task 10); connect requires a
-      // RUNNING session and runs the proxy in the foreground. Placeholder until
-      // the proxy is wired.
-      process.stderr.write("connect: not yet available in this build\n");
-      exitCode = 1;
+    .action(async () => {
+      exitCode = await connectCommand(buildDeps({ assumeYes: false }));
     });
 
   program
