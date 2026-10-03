@@ -17,6 +17,14 @@ packages:
 allowBuilds:
   esbuild: true
 
+# This project does not use pnpm's minimumReleaseAge supply-chain gating
+# (tech.md). Pin it to 0 so an exact-pinned, recently published dependency
+# (e.g. @aws-sdk/client-lambda-microvms) is not blocked by an ambient policy.
+# This is NOT the forbidden `minimumReleaseAgeExclude` per-package allow-list;
+# it is the global off switch. Dependencies stay exact-pinned in the lockfile
+# and `pnpm audit --audit-level=high` runs in CI.
+minimumReleaseAge: 0
+
 # NOTE: tech.md states minimumReleaseAge is NOT used by this project. If an
 # ambient (global) pnpm config enables it, `pnpm install` may try to add a
 # `minimumReleaseAgeExclude` entry here; do not commit it.

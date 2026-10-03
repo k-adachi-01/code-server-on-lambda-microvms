@@ -15,7 +15,12 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "hygiene": "node scripts/hygiene.mjs --full",
-    "hygiene:staged": "node scripts/hygiene.mjs --staged"
+    "hygiene:staged": "node scripts/hygiene.mjs --staged",
+    "infra:diff": "pnpm -C infra exec cdk diff",
+    "infra:deploy": "pnpm -C infra exec cdk deploy --outputs-file cdk-outputs.json",
+    "infra:destroy": "pnpm -C infra exec cdk destroy",
+    "infra:synth": "pnpm -C infra exec cdk synth",
+    "infra:test": "pnpm -C infra exec vp test --run"
   },
   "dependencies": {
     "@aws-sdk/client-lambda-microvms": "3.1146.0",

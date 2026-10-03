@@ -1,0 +1,26 @@
+{
+  "name": "@csmvm/infra",
+  "version": "0.0.0",
+  "private": true,
+  "description": "CDK app: MicroVM image build inputs and least-privilege IAM for code-server-on-lambda-microvms.",
+  "bin": {
+    "app": "bin/app.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.272.0",
+    "constructs": "10.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "tsx": "4.23.15",
+    "vite-plus": "1.0.0"
+  }
+}
