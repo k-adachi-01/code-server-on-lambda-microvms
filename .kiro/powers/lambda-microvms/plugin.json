@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "lambda-microvms",
+  "version": "0.1.0",
+  "description": "Build and operate the code-server-on-lambda-microvms project: a local CLI that runs code-server inside a single AWS Lambda MicroVM. Bundles the AWS MCP Server (Agent Toolkit for AWS) and this repo's own conventions, lifecycle rules, and the csmvm CLI surface.",
+  "author": {
+    "name": "k-adachi-01"
+  },
+  "keywords": [
+    "lambda microvms",
+    "lambda-microvms",
+    "microvm",
+    "firecracker",
+    "code-server",
+    "csmvm",
+    "agent toolkit",
+    "aws mcp",
+    "aws-sdk client-lambda-microvms",
+    "ephemeral dev environment"
+  ]
+}
