@@ -45,8 +45,8 @@ flowchart LR
 ### Repository layout
 
 ```
-package.json, pnpm-workspace.yaml, pnpm-lock.yaml, biome.json, flake.nix
-.gitignore, .gitleaks.toml, csmvm.config.example.json
+package.json, pnpm-workspace.yaml, pnpm-lock.yaml, vite.config.ts, flake.nix
+.gitignore, .gitleaks.toml, .vite-hooks/pre-commit, csmvm.config.example.json
 src/core/      session.ts, transitions.ts, reconcile.ts, status-map.ts,
                config.ts, retry.ts, run-params.ts   (no fs/net/process/AWS imports)
 src/shell/     aws-adapter.ts, state-store.ts, readiness.ts, proxy/*, redact.ts, prompt.ts
@@ -58,7 +58,7 @@ test/          core/*.property.test.ts, cli/*.test.ts, proxy/*.test.ts, fakes/fa
 docs/          ENV-CHECKLIST.md, phase0-findings.md
 ```
 
-The import boundary is enforced by Biome `noRestrictedImports` on `src/core/**`. It bans `@aws-sdk/*`, `node:fs`, `node:net`, `node:http(s)`, `node:process`, and `node:child_process`. An import-scan test adds a second check (R16.4).
+The import boundary is enforced by the Oxlint `no-restricted-imports` rule (configured through Vite+'s `lint` section) on `src/core/**`. It bans `@aws-sdk/*`, `node:fs`, `node:net`, `node:http(s)`, `node:process`, and `node:child_process`. An import-scan test adds a second, tool-independent check and is the authoritative boundary guard if Oxlint cannot express the rule (R16.4).
 
 ## Components and Interfaces
 
@@ -688,12 +688,12 @@ Execution_Role (only if Q-4 is overridden, R14.4): trusted only by the MicroVMs 
 
 ## Testing Strategy
 
-- Tooling: vitest (`vitest --run`) and fast-check, at pinned versions. Each property test runs `numRuns ≥ 100` and is tagged in its title with `Feature: lambda-microvm-code-server, Property N: <title>`. P1–P17 each map to one test file under `test/core/`. The core tests need no fakes because the clock and IDs are passed in through `Ctx`.
+- Tooling: Vitest (`vp test`, via `pnpm test`) and fast-check, at pinned versions. Each property test runs `numRuns ≥ 100` and is tagged in its title with `Feature: lambda-microvm-code-server, Property N: <title>`. P1–P17 each map to one test file under `test/core/`. The core tests need no fakes because the clock and IDs are passed in through `Ctx`.
 - CLI behavior tests (EX) run the real interpreter against `FakeMicrovms`, an in-memory `MicrovmsPort`. It supports status scripts, eventual consistency (delayed visibility), error injection per call, idempotent clientToken handling, and call recording. The tests also use a fake prompt, a fake TTY flag, a fake clock and sleep, and a temp directory for the State_File. They cover R1.4 (zero mutating calls on rejection or decline), R2.x, R3.4, R6–R8 EX, R9.1, R9.5–R9.8, R10.1–R10.5, R11.3, R12.1, and R12.3–R12.6. The suite runs without credentials and without external network (R16.6). The SDK client is never constructed in tests.
 - Auth_Proxy tests run against a local fake upstream (`http` and `ws` servers on 127.0.0.1) that records headers and subprotocols. They cover R4.1–R4.9, the Q-1 login, cookie, Host, and Origin checks, and the absence of the token in responses and logs (captured logger, regex for JWE shape).
 - Hook_Handler tests start the handler against a fake code-server health endpoint. They cover healthy, slow, and never-healthy cases for R13.2 and R13.3. Static checks cover R13.5 and R13.6 (Dockerfile pin regex plus gitleaks over `image/`).
 - CDK assertions (`infra/test`): `Template.fromStack` checks the resource types (only the asset, roles, policies, and the MicrovmImage, R14.1), the trust policies (R14.4, R14.6), the Operator_Policy actions and resources, and the wildcard allow-list (R14.2, R14.3). A snapshot of the IAM statements and a `cdk synth` run in CI cover R14.5. The scripts are checked for the absence of auto-approval flags (R10.6).
-- Hygiene: `pnpm exec biome check`, the import-boundary test (R16.4), the gitleaks hook and CI job, a `.gitignore` content test, and `nix flake check` for the devShell (R16.1–R16.3, R15.x).
+- Hygiene: `pnpm check` (Oxlint + Oxfmt + typecheck via Vite+), the import-boundary test (R16.4), the gitleaks hook and CI job, a `.gitignore` content test, and `nix flake check` for the devShell (R16.1–R16.3, R15.x).
 
 ### Opt-in ENV checklist (`docs/ENV-CHECKLIST.md`, R16.7)
 
@@ -785,4 +785,4 @@ The unconditional deltas below are already applied to requirements.md. The condi
 | R13.1–R13.7 | `image/`, snapshot model (A-14) | EX + ENV (S1) |
 | R14.1–R14.6 | `infra/` stack, Operator_Policy | CDK assertions + S1, S2 |
 | R15.1–R15.4 | `.gitignore`, gitleaks, adapter credential chain | EX |
-| R16.1–R16.7 | Toolchain, Biome import rule, test suites, ENV checklist | EX |
+| R16.1–R16.7 | Toolchain, Oxlint import rule, test suites, ENV checklist | EX |

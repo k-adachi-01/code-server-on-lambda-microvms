@@ -276,8 +276,8 @@ Facts about Lambda MicroVMs behavior are listed in the "Assumptions and Open Que
 #### Acceptance Criteria
 
 1. THE project SHALL be written in TypeScript and SHALL use pnpm as the only package manager, with `pnpm-lock.yaml` committed and a `packageManager` field in `package.json`. [EX]
-2. THE project SHALL use Biome for linting and formatting, and `pnpm exec biome check` SHALL pass on the repository. [EX]
-3. THE project SHALL provide a Nix flake devShell that supplies Node.js, pnpm, and the AWS CDK CLI at pinned versions. [EX]
+2. THE project SHALL use Vite+ (`vite-plus`) as the JS/TS toolchain for linting, formatting, and testing (Oxlint and Oxfmt for lint and format, Vitest for tests), SHALL pin `vitest` to an exact version and alias `vite` to `@voidzero-dev/vite-plus-core` through pnpm overrides, and `pnpm check` SHALL pass on the repository. [EX]
+3. THE project SHALL provide a Nix flake devShell that supplies Node.js, pnpm, the AWS CDK CLI, and gitleaks at pinned versions; Vite+ SHALL be a project-local devDependency run on that Node and pnpm, and the project SHALL NOT use Vite+ runtime or package-manager management (`vp env`, `vp install`, `vp add`, `setup-vp`). [EX]
 4. THE Lifecycle_Core SHALL import zero modules from the AWS SDK, Node.js file-system, network, or process APIs. [EX]
 5. THE project SHALL include fast-check property-based tests covering every acceptance criterion marked `[PBT]` in this document. [EX]
 6. THE automated test suite SHALL run without AWS credentials and without network access, using a mocked AWS_Adapter for CLI behavior tests. [EX]

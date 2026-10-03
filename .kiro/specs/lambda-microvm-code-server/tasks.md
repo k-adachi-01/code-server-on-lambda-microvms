@@ -94,19 +94,21 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 
 - [ ] 2. Repository scaffold and hygiene
   - [ ] 2.1 Create the pnpm workspace and TypeScript baseline
-    - Root `package.json` with `"packageManager": "pnpm@<exact>"` and scripts `test` (`vitest --run`), `lint` (`biome check`), and `typecheck`.
-    - `pnpm-workspace.yaml` listing `.`, `infra`, and `image/hooks`. A strict `tsconfig.json`.
-    - Exact-pinned dev and runtime deps: `typescript`, `vitest`, `fast-check`, `zod`, `ws`, `@aws-sdk/client-lambda-microvms`, `@biomejs/biome`. Commit `pnpm-lock.yaml`.
+    - Root `package.json` with `"packageManager": "pnpm@<exact>"` and scripts `check`, `lint`, `fmt`, `test`, `typecheck`, and `build` that invoke project-local Vite+ (`vp ...`). `test` runs `vp test`.
+    - `pnpm-workspace.yaml` listing `.`, `infra`, and `image/hooks`, plus `overrides` that alias `vite` to `npm:@voidzero-dev/vite-plus-core@latest` and pin `vitest` to the exact version from `vp toolchain vitest` (so the project and `vp test` share one Vitest). A strict `tsconfig.json`.
+    - `vite.config.ts` from `vite-plus` holding the `test` (Vitest), `lint` (Oxlint), `fmt` (Oxfmt), and `pack` sections.
+    - Exact-pinned dev and runtime deps: `typescript`, `vite-plus`, `fast-check`, `zod`, `ws`, `commander`, `@aws-sdk/client-lambda-microvms`. `tsx` is kept only as a dev fallback if `vp node` cannot run `main.ts`. Commit `pnpm-lock.yaml`.
+    - Node.js, pnpm, the AWS CDK CLI, and gitleaks come from the Nix flake devShell, not from Vite+ (`vp env`/`vp install`/`setup-vp` are unused); dependency operations use `pnpm install`/`pnpm add` directly.
     - Empty `src/core/`, `src/shell/`, `src/cli/`, and `test/` directories, each with an index placeholder.
     - _Requirements: R16.1_
 
-  - [ ] 2.2 Configure Biome with the core import boundary
-    - Add `biome.json` with lint and format enabled.
-    - Add an override for `src/core/**` using `noRestrictedImports` to ban `@aws-sdk/*`, `node:fs`, `node:net`, `node:http`, `node:https`, `node:process`, and `node:child_process`.
+  - [ ] 2.2 Configure the Oxlint core import boundary
+    - In `vite.config.ts`, enable Oxlint (lint) and Oxfmt (fmt) through Vite+.
+    - Add an Oxlint `no-restricted-imports` override for `src/core/**` to ban `@aws-sdk/*`, `node:fs`, `node:net`, `node:http`, `node:https`, `node:process`, and `node:child_process`. Confirm Oxlint can express both the `node:`-prefixed specifiers and the `src/core/**` path scope; if it cannot, rely on the import-scan test (task 2.6) as the authoritative boundary guard.
     - _Requirements: R16.2, R16.4_
 
-  - [ ] 2.3 Configure vitest and property-test conventions
-    - Add `vitest.config.ts`. Add `test/support/pbt.ts`, which exports `numRuns >= 100` and a title helper producing `Feature: lambda-microvm-code-server, Property N: <title>`.
+  - [ ] 2.3 Configure Vitest and property-test conventions
+    - Configure the `test` section in `vite.config.ts` (Vitest via Vite+). Add `test/support/pbt.ts`, which exports `numRuns >= 100` and a title helper producing `Feature: lambda-microvm-code-server, Property N: <title>`.
     - Add one smoke test so `pnpm test` passes.
     - _Requirements: R16.5, R16.6_
 
@@ -117,13 +119,13 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
   - [ ] 2.5 Add secret protection and CI
     - Add `.gitignore` covering `.session/`, `.env*`, `cdk.out/`, `node_modules/`, `csmvm.config.json`, `*.token`, and `infra/cdk-outputs.json`.
     - Add `.gitleaks.toml`.
-    - Add `.githooks/pre-commit`, which runs `gitleaks protect --staged --config .gitleaks.toml`. Enabling the hook is documented in the README (task 15.2). The agent does not change git config.
+    - Add `.vite-hooks/pre-commit`, which runs `gitleaks protect --staged --config .gitleaks.toml` and then `vp staged` (Oxlint/Oxfmt on staged files). The user enables it with `vp hooks enable`; the agent does not change git config and does not add Husky or another hook manager. Enabling is documented in the README (task 15.2).
     - Add `csmvm.config.example.json` with placeholder values only (`region: "us-east-1"`, `maximumDurationInSeconds: 7200`, no `networkConnectorArns`).
-    - Add `.github/workflows/ci.yml`: Nix devShell, `pnpm install --frozen-lockfile`, `pnpm exec biome check`, `pnpm run test`, and `gitleaks detect --config .gitleaks.toml`. Note the project CI policy in a comment.
+    - Add `.github/workflows/ci.yml`: install Nix with `DeterminateSystems/determinate-nix-action` pinned by commit SHA, run on `ubuntu-24.04` (no macOS matrix), and inside `nix develop --command` run `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test`, `pnpm audit --audit-level=high` (fail on high or above; individually ignore only confirmed non-applicable advisories), and `gitleaks detect --config .gitleaks.toml`. Note the project CI policy in a comment.
     - _Requirements: R15.1, R15.2, R15.3_
 
   - [ ] 2.6 Write the import-boundary scan test
-    - `test/hygiene/core-imports.test.ts` scans every file under `src/core/` and fails on any banned import (second check next to Biome).
+    - `test/hygiene/core-imports.test.ts` scans every file under `src/core/` and fails on any banned import (second check next to the Oxlint `no-restricted-imports` rule, and the authoritative guard if Oxlint cannot express it).
     - _Requirements: R16.4_
 
   - [ ]* 2.7 Write the `.gitignore` content test
@@ -388,11 +390,11 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 - [ ] 13. MicroVM Image
   - Prerequisite: task 1.4 (S3, endpoint authentication) must be complete before any 13.x task starts; task 1.2 (S1) must also be complete.
   - [ ] 13.1 Implement the Hook_Handler in `image/hooks/`
-    - Own `package.json` in the workspace. Implements the hook port, path, and contract from S1.
+    - Own `package.json` in the workspace. Implements the hook port, path, and contract from S1. Bundled to a single file through Vite+'s `pack` section (`vite.config.ts`), target/platform Node, so the MicroVM image carries no `node_modules` for the handler. The handler runs on the Node bundled with code-server (pinned indirectly by the code-server exact version + SHA-256); if S1 shows the handler needs a specific Node version, switch to an independently pinned Node.
     - `run` does not start code-server (it is already running from the build-time snapshot, A-14). It only polls the code-server health check until a deadline (run hook timeout minus 2 s), then returns 200 or 503. If S1 found a per-VM value that must differ, `run` restores it before the health check, without injecting secrets.
     - `resume`, `suspend`, and `terminate` return 200 at once and log the hook name and the `sessionId` from the payload.
     - `/ready` and `/validate` use the longer deadline.
-    - If S1 requires a shared port, the handler is the front process and reverse-proxies to code-server on 8081, including WebSocket.
+    - If S1 requires a shared port, the handler is the front process and reverse-proxies to code-server on 8081, including WebSocket; in that case re-decide whether `ws` is bundled into the pack output or kept external.
     - _Requirements: R13.2, R13.3, R13.4, R13.1_
 
   - [ ]* 13.2 Write unit tests for the Hook_Handler
@@ -401,7 +403,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 
   - [ ] 13.3 Write the Dockerfile, `entrypoint.sh`, and workspace seed
     - Multi-stage build: compile the hooks, then a runtime stage `FROM public.ecr.aws/lambda/microvms:al2023-minimal` (verified base, A-12; base image ARN form `arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1`).
-    - code-server from the release tarball at exact `ARG CODE_SERVER_VERSION` with a pinned SHA-256. Runtime packages: git, curl, tini. Non-root `coder` user, empty `workspace-seed/`.
+    - code-server from the release tarball at exact `ARG CODE_SERVER_VERSION` with a pinned SHA-256. The hook handler runs on the Node bundled with code-server; verify and record that Node version at build time. Runtime packages git, curl, tini come from the AL2023 base image / pinned repositories (no individual exact pin). Non-root `coder` user, empty `workspace-seed/`.
     - The entrypoint starts the Hook_Handler and runs `code-server --auth none --bind-addr 0.0.0.0:8080 --disable-telemetry /home/coder/workspace` under tini during the image build, so the running process is captured in the snapshot. If S3 required the password fallback, use that instead, with the password set per VM at run time.
     - Generate no secret and no per-user unique value at build time (no password, session secret, or keys).
     - _Requirements: R13.1, R13.5, R13.6, R13.7, R5.4_
@@ -413,6 +415,7 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
 - [ ] 14. Infrastructure (CDK)
   - [ ] 14.1 Scaffold the `infra/` CDK package
     - `infra/package.json` with exact-pinned `aws-cdk-lib` and `constructs`, plus `cdk.json`, `bin/app.ts`, and `tsconfig.json`.
+    - The AWS CDK CLI comes from the Nix flake devShell (not pnpm). Confirm the Nix-pinned CLI version is at least the minimum CLI version required by the pinned `aws-cdk-lib` (no same-minor rule, since the CLI and library version lines differ). S1 confirms the `CfnMicrovmImage` type and `cdk synth`; bump the pin there if needed.
     - _Requirements: R14.1, R14.5_
 
   - [ ] 14.2 Implement the build context, Image_Build_Role, and Image in `infra/lib/stack.ts`
@@ -445,13 +448,13 @@ Every Phase 0 task, and the final ENV task, is gated. It **requires explicit use
     - _Requirements: R16.7, R2.4, R4.2, R4.3, R5.1, R5.2, R5.3, R6.2, R7.2, R7.5, R13.1, R13.2, R13.4_
 
   - [ ] 15.2 Write `README.md`
-    - Cover: Nix devShell, `pnpm install`, enabling `.githooks`, `cdk diff` review before deploy or destroy, `config import`, attaching the Operator_Policy to an SSO role, and the command reference with exit codes.
+    - Cover: Nix devShell, `pnpm install`, enabling the Git hook with `vp hooks enable`, `cdk diff` review before deploy or destroy, `config import`, attaching the Operator_Policy to an SSO role, and the command reference with exit codes.
     - Also explain the local-auth login URL and the `localAuth: false` warning, cost bounds and suspended snapshot cost, and link to the ENV checklist and Phase 0 findings.
     - _Requirements: R10.6, R16.7, R11.3, R4.11, R15.3_
 
 - [ ] 16. Final checkpoint: all automated checks green
   - Ensure all tests pass, ask the user if questions arise.
-  - Run `pnpm exec biome check`, `pnpm run test`, `cdk synth`, `nix flake check`, and gitleaks.
+  - Run `pnpm check`, `pnpm test`, `cdk synth`, `nix flake check`, and gitleaks.
 
 - [ ] 17. Final ENV end-to-end verification (opt-in, costs money)
   - [ ] 17.1 Run the ENV checklist against a real deployment
