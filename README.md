@@ -78,35 +78,41 @@ pnpm install
 # 3. (optional) enable the pre-commit hook: runs gitleaks + lint/format on staged files
 vp hooks enable
 
-# 4. Bundle the MicroVM lifecycle hook handler to a single file
+# 4. Build the CLI (compiles TypeScript to dist/cli/main.js, which `pnpm csmvm` runs)
+pnpm build
+
+# 5. Bundle the MicroVM lifecycle hook handler to a single file
 #    (produces image/hooks/dist/handler.mjs, which the image build copies in)
 pnpm -C image/hooks build
 
-# 5. Deploy persistent infrastructure (review the diff first — this creates AWS
+# 6. Deploy persistent infrastructure (review the diff first — this creates AWS
 #    resources). This creates the least-privilege IAM roles/policy and uploads
 #    the image build context to S3. It does NOT build the MicroVM image itself.
 pnpm -C infra exec cdk diff
 pnpm -C infra exec cdk deploy --outputs-file cdk-outputs.json
 
-# 6. Build the MicroVM image via the Lambda MicroVMs API and wait for it to
+# 7. Build the MicroVM image via the Lambda MicroVMs API and wait for it to
 #    become ACTIVE. (The image is built out-of-band rather than by CloudFormation
 #    — see docs/phase0-findings.md, S1, for why the CFN path was not used.)
 #    Reads infra/cdk-outputs.json for the build role and uploaded artifact.
 node scripts/build-image.mjs
 
-# 7. Import the deployed Image ARN / Region into the local config
+# 8. Import the deployed Image ARN / Region into the local config
 pnpm csmvm config import
 
-# 8. Attach the Operator_Policy (printed in the CDK outputs) to your SSO role.
+# 9. Attach the Operator_Policy (printed in the CDK outputs) to your SSO role.
 ```
 
-Steps 4–6 are the one-time image setup; after that, `launch` has an image to run.
+Steps 5–7 are the one-time image setup; after that, `launch` has an image to run. `pnpm csmvm`
+runs the compiled CLI from step 4 (`node dist/cli/main.js`); rebuild with `pnpm build` after
+changing CLI source.
 `cdk deploy` / `cdk destroy` are intentionally run **without** auto-approval flags. Always review
 `cdk diff` before applying.
 
 ## Usage
 
-Run commands through the CLI (`csmvm`) inside `nix develop`.
+Run commands through the CLI as `pnpm csmvm <command>` inside `nix develop` (or
+`node dist/cli/main.js <command>` after `pnpm build`).
 
 | Command | What it does |
 |---|---|
