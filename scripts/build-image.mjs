@@ -76,9 +76,17 @@ async function listVersions() {
   const versions = [];
   let nextToken;
   do {
-    const page = await client.send(
-      new ListMicrovmImageVersionsCommand({ imageIdentifier: imageArn, nextToken }),
-    );
+    let page;
+    try {
+      page = await client.send(
+        new ListMicrovmImageVersionsCommand({ imageIdentifier: imageArn, nextToken }),
+      );
+    } catch (e) {
+      // The image does not exist yet (first-ever deploy): no versions. Treat as
+      // an empty set so the pre-create snapshot does not abort the run.
+      if (e.name === "ResourceNotFoundException") return [];
+      throw e;
+    }
     for (const v of page.items ?? []) {
       if (v.imageVersion !== undefined) versions.push(v.imageVersion);
     }
@@ -97,13 +105,20 @@ async function listAllBuilds() {
   for (const version of versions) {
     let nextToken;
     do {
-      const page = await client.send(
-        new ListMicrovmImageBuildsCommand({
-          imageIdentifier: imageArn,
-          imageVersion: version,
-          nextToken,
-        }),
-      );
+      let page;
+      try {
+        page = await client.send(
+          new ListMicrovmImageBuildsCommand({
+            imageIdentifier: imageArn,
+            imageVersion: version,
+            nextToken,
+          }),
+        );
+      } catch (e) {
+        // A version may be gone by the time we scan it; skip it.
+        if (e.name === "ResourceNotFoundException") break;
+        throw e;
+      }
       for (const b of page.items ?? []) {
         if (b.buildId !== undefined) {
           out.push({ version, buildId: b.buildId, createdAt: b.createdAt });
@@ -121,26 +136,31 @@ const BUILD_KEY = (b) => `${b.version}#${b.buildId}`;
  * Find the build this run just triggered. We never trust "newest in the list":
  * a freshly triggered build may not be visible yet, and the previous version's
  * build is already SUCCESSFUL — picking it would report a false BUILD_OK.
- * Instead we poll until a (version, buildId) pair appears that was NOT present
- * before the create/update call, and return exactly that build.
+ *
+ * Correlation rules, strongest first:
+ *   1. If the Create/Update response gave us an exact (version, buildId), use it.
+ *   2. Otherwise poll for builds that were NOT present before the mutation. If
+ *      exactly one appears, it is ours. If several appear (e.g. a concurrent
+ *      build from another caller), we cannot tell which is ours, so we refuse
+ *      to guess and return an ambiguity error instead of risking a wrong build.
  */
 async function waitForNewBuild(priorKeys, hintVersion, hintBuildId) {
   // Fast path: the create/update call told us the exact build.
   if (hintVersion !== undefined && hintBuildId !== undefined) {
-    return { version: hintVersion, buildId: hintBuildId };
+    return { kind: "ok", version: hintVersion, buildId: hintBuildId };
   }
   const findDeadline = Date.now() + 2 * 60 * 1000; // up to 2 min for it to appear
   for (;;) {
     const builds = await listAllBuilds();
     const fresh = builds.filter((b) => !priorKeys.has(BUILD_KEY(b)));
-    if (fresh.length > 0) {
-      // If several appeared, take the newest by createdAt.
-      fresh.sort(
-        (a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime(),
-      );
-      return { version: fresh[0].version, buildId: fresh[0].buildId };
+    if (fresh.length === 1) {
+      return { kind: "ok", version: fresh[0].version, buildId: fresh[0].buildId };
     }
-    if (Date.now() > findDeadline) return null;
+    if (fresh.length > 1) {
+      // Cannot correlate: more than one previously-unseen build appeared.
+      return { kind: "ambiguous", builds: fresh.map(BUILD_KEY) };
+    }
+    if (Date.now() > findDeadline) return { kind: "not-found" };
     await sleep(5000);
   }
 }
@@ -170,8 +190,15 @@ try {
 }
 
 const nb = await waitForNewBuild(priorKeys, hintVersion, hintBuildId);
-if (!nb) {
-  console.error("could not identify the newly triggered build to poll");
+if (nb.kind === "not-found") {
+  console.error("could not identify the newly triggered build to poll (none appeared)");
+  process.exit(1);
+}
+if (nb.kind === "ambiguous") {
+  console.error(
+    `could not identify the newly triggered build: multiple new builds appeared ` +
+      `(${nb.builds.join(", ")}). Refusing to guess which is this run's build.`,
+  );
   process.exit(1);
 }
 console.log(`polling imageVersion=${nb.version} buildId=${nb.buildId}`);

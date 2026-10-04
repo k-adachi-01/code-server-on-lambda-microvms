@@ -280,18 +280,34 @@ export function startProxy(deps: ProxyServerDeps): Promise<RunningProxy> {
     browserWs.on("message", onEarlyMessage);
     browserWs.on("close", () => {
       browserClosed = true;
+      // Only tear down the upstream if it exists. Closing a still-CONNECTING
+      // socket emits an 'error' ("closed before the connection was
+      // established"), so the upstream always has its error handler attached
+      // before any close() is reachable (see below).
       if (upstreamWs !== null) upstreamWs.close();
     });
 
     try {
       const { token } = await deps.tokenCache.get();
+      // If the browser already went away during the async token fetch, never
+      // open the upstream at all — avoids a connect-then-immediately-close that
+      // would surface as an unhandled 'error' on a CONNECTING socket.
+      if (browserClosed) return;
+
       const authValue = authValueFromHeaders(deps.authHeadersFromToken(token));
       // Preserve the browser's path + query; only swap scheme/host for upstream.
       upstreamWs = new WebSocket(
         buildWsUrl(deps.endpoint, reqUrl),
         wsSubprotocols(authValue, deps.codeServerPort),
       );
-      // The browser may already have gone away during the async connect.
+      // Attach the error handler immediately, before anything can call close()
+      // on the still-CONNECTING socket (the browser-close handler above, or the
+      // browserClosed re-check below). A connecting socket that is closed emits
+      // 'error', which crashes the process if unhandled.
+      upstreamWs.on("error", () => browserWs.close());
+
+      // The browser may have closed in the microtask between the check above and
+      // constructing the socket; tear down now that the error handler is set.
       if (browserClosed) {
         upstreamWs.close();
         return;
@@ -316,7 +332,6 @@ export function startProxy(deps: ProxyServerDeps): Promise<RunningProxy> {
         relayMessage(browserWs, up);
         relayMessage(up, browserWs);
       });
-      upstreamWs.on("error", () => browserWs.close());
     } catch {
       browserWs.close();
     }

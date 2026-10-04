@@ -369,4 +369,64 @@ describe("WebSocket relay (integration)", () => {
     browser.close();
     expect(received).toEqual(["sent-on-open", "sent-later"]);
   });
+
+  it("does not crash when the browser closes during the token fetch (CONNECTING upstream)", async () => {
+    // Regression: closing the browser mid-connect used to call upstreamWs.close()
+    // on a still-CONNECTING socket before an 'error' handler was attached, which
+    // surfaced as an unhandled 'error' and crashed the process. The upstream must
+    // never even be reached here, and the test process must survive.
+    let upstreamConnections = 0;
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((r) => wss.on("listening", r));
+    const upstreamPort = (wss.address() as AddressInfo).port;
+    wss.on("connection", () => {
+      upstreamConnections += 1;
+    });
+    cleanup.push(() => wss.close());
+
+    const redactor = new Redactor();
+    const slowPort = {
+      async createAuthToken() {
+        await new Promise((r) => setTimeout(r, 120));
+        return {
+          token: JSON.stringify({ "X-aws-proxy-auth": "wsval" }),
+          expiresAt: Date.now() + 900_000,
+        };
+      },
+    } as unknown as ConstructorParameters<typeof TokenCache>[0]["port"];
+    const tokenCache = new TokenCache({
+      port: slowPort,
+      microvmId: "m-1",
+      codeServerPort: 8080,
+      maxTokenMinutes: 15,
+      refreshMarginSeconds: 60,
+      now: () => Date.now(),
+      redactor,
+    });
+    const proxy = await startProxy({
+      endpoint: "unused.example",
+      codeServerPort: 8080,
+      listenPort: 0,
+      localAuth: false,
+      tokenCache,
+      logger: new RedactingLogger(redactor),
+      readState: async () => "RUNNING",
+      authHeadersFromToken,
+      upstreamWsUrl: (_endpoint, reqUrl) => `ws://127.0.0.1:${upstreamPort}${reqUrl}`,
+    });
+    cleanup.push(() => proxy.stop());
+
+    const browser = new WebSocket(`ws://127.0.0.1:${proxy.port}/ws`);
+    await new Promise<void>((resolve, reject) => {
+      browser.on("open", resolve);
+      browser.on("error", reject);
+    });
+    // Close well within the 120ms token delay, before the upstream connects.
+    browser.close();
+
+    // Give the relay time to run the token fetch + close path. If the regression
+    // were present, an unhandled 'error' would have crashed the worker by now.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(upstreamConnections).toBe(0);
+  });
 });
