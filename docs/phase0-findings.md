@@ -95,3 +95,52 @@ value is recorded here (public repo; see steering `tech.md`).
 - A-12 (build pipeline via CloudFormation): **amended** — build via the direct
   API, not CFN.
 - A-14 (snapshot restore): still Unverified (blocked on the build path).
+
+## MCP-sourced correction — hook path contract (Lesson 6, S1 follow-up)
+
+### How this was found (MCP actually used)
+
+Using the project's own MCP server (`.kiro/powers/lambda-microvms/mcp.json` →
+the official **MCP Proxy for AWS**, `uvx mcp-proxy-for-aws-cli`, control plane
+`https://aws-mcp.us-east-1.api.aws/mcp`, `AWS_REGION=ap-northeast-1`), the agent:
+
+1. `initialize` + `tools/list` → 8 tools returned (`aws___run_script`,
+   `aws___search_documentation`, `aws___read_documentation`,
+   `aws___retrieve_skill`, `aws___list_regions`,
+   `aws___get_regional_availability`, `aws___get_presigned_url`,
+   `aws___get_tasks`). Server identified itself as "MCP Proxy for AWS" v1.7.0.
+2. `tools/call aws___search_documentation { search_phrase: "Lambda MicroVMs
+   lifecycle RunMicrovm SuspendMicrovm hooks" }` → top result **"Running and
+   using MicroVMs"**.
+
+SigV4 auth for the AWS MCP endpoint used short-lived PoC-Sandbox credentials
+from `aws-agent-lease` (read-only docs call; no AWS resource was created,
+changed, or deleted).
+
+### What the official doc said
+
+> Hooks listen on the path `/aws/lambda-microvms/runtime/v1/<hook-name>` on the
+> port you configure. Your MicroVM begins receiving external traffic after the
+> `/run` hook returns HTTP 200.
+
+Hook names and timing confirmed: `run` (traffic gate), `resume` (VM stays
+`SUSPENDED` until it returns), `suspend`, `terminate` (final only), plus the
+image-build hooks `ready` / `validate`.
+
+### Bug this surfaced (and fixed)
+
+`image/hooks/src/handler.ts` matched on the **bare** path (`req.url === "/run"`
+etc.). In production Lambda POSTs to
+`/aws/lambda-microvms/runtime/v1/run`, which would never match — so every hook,
+including the traffic-gating `/run`, would have fallen through to the default
+immediate-200 branch and the health check would never run. Fixed by parsing the
+hook name from the official prefix (`hookNameFromPath` /
+`HOOK_PATH_PREFIX = "/aws/lambda-microvms/runtime/v1/"`), with the bare form kept
+as a fallback for local probes/tests. This closes the S1 "hook path contract"
+follow-up that was previously listed as unverified.
+
+### Affected items
+
+- S1 hook path/timing contract: **Verified against official AWS docs via MCP**
+  (path prefix `/aws/lambda-microvms/runtime/v1/`, `/run` is the traffic gate).
+- `image/hooks` handler: corrected to match the official path prefix.
