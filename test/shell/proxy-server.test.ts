@@ -8,10 +8,12 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { WebSocket, WebSocketServer } from "ws";
 import {
   startProxy,
   isValidSubprotocolToken,
   authValueFromHeaders,
+  requestHasBody,
   wsSubprotocols,
   type RunningProxy,
   type UpstreamRequest,
@@ -83,6 +85,29 @@ function makeTokenCache(fake: FakeMicrovms, id: string, redactor: Redactor): Tok
   });
 }
 
+/** Perform a request against the proxy on 127.0.0.1 and collect the full response. */
+function request(
+  method: string,
+  port: number,
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<{
+  status: number;
+  body: string;
+  headers: Record<string, string | string[] | undefined>;
+}> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ hostname: "127.0.0.1", port, path, method, headers }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c) => (body += c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 /** Perform a GET against the proxy on 127.0.0.1 and collect the full response. */
 function get(
   port: number,
@@ -93,19 +118,7 @@ function get(
   body: string;
   headers: Record<string, string | string[] | undefined>;
 }> {
-  return new Promise((resolve, reject) => {
-    const req = httpRequest(
-      { hostname: "127.0.0.1", port, path, method: "GET", headers },
-      (res) => {
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", (c) => (body += c));
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
-      },
-    );
-    req.on("error", reject);
-    req.end();
-  });
+  return request("GET", port, path, headers);
 }
 
 describe("proxy server (integration)", () => {
@@ -204,6 +217,19 @@ describe("proxy server (integration)", () => {
     expect(upstream.requestCount).toBe(2);
   });
 
+  it("retries a bodyless DELETE after a forced refresh (not treated as unreplayable)", async () => {
+    // A bodyless non-GET must still be retried: method must not gate the retry.
+    const upstream = await startUpstream((n) =>
+      n === 1 ? { status: 403, body: "stale" } : { status: 200, body: "deleted" },
+    );
+    const { port } = await launch({ upstream });
+    const res = await request("DELETE", port, "/thing");
+    expect(res.status).toBe(200);
+    expect(res.body).toBe("deleted");
+    // Two upstream attempts: original + post-refresh retry (refresh happened).
+    expect(upstream.requestCount).toBe(2);
+  });
+
   it("never leaks the auth token value in the response headers or body", async () => {
     // Echo the auth header value back in both a response header and the body —
     // the proxy must strip the header and the Redactor-wrapped logger must not
@@ -247,5 +273,100 @@ describe("WebSocket subprotocol helpers", () => {
       "lambda-microvms.authentication.validToken",
       "lambda-microvms.port.8080",
     ]);
+  });
+});
+
+describe("requestHasBody", () => {
+  it("is false for a bodyless request regardless of method", () => {
+    expect(requestHasBody({ headers: {} })).toBe(false);
+    expect(requestHasBody({ headers: { "content-length": "0" } })).toBe(false);
+    // A bodyless DELETE/POST (no content-length, no transfer-encoding) is retryable.
+    expect(requestHasBody({ headers: { host: "x" } })).toBe(false);
+  });
+
+  it("is true when a body was streamed (content-length > 0 or chunked)", () => {
+    expect(requestHasBody({ headers: { "content-length": "12" } })).toBe(true);
+    expect(requestHasBody({ headers: { "transfer-encoding": "chunked" } })).toBe(true);
+  });
+
+  it("treats a non-numeric content-length as no body", () => {
+    expect(requestHasBody({ headers: { "content-length": "abc" } })).toBe(false);
+  });
+});
+
+describe("WebSocket relay (integration)", () => {
+  const cleanup: Array<() => void> = [];
+  afterEach(() => {
+    for (const fn of cleanup.splice(0)) fn();
+  });
+
+  it("buffers browser frames sent before the upstream opens and flushes them in order", async () => {
+    // Fake upstream WS server that records every message it receives, in order.
+    const received: string[] = [];
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((r) => wss.on("listening", r));
+    const upstreamPort = (wss.address() as AddressInfo).port;
+    wss.on("connection", (ws) => {
+      ws.on("message", (data) => received.push(Buffer.from(data as Buffer).toString("utf8")));
+    });
+    cleanup.push(() => wss.close());
+
+    // A token cache whose mint is delayed, so the browser's first frames arrive
+    // before the upstream socket is open — the exact window that used to drop
+    // frames.
+    const redactor = new Redactor();
+    const slowPort = {
+      async createAuthToken() {
+        await new Promise((r) => setTimeout(r, 120));
+        return {
+          token: JSON.stringify({ "X-aws-proxy-auth": "wsval" }),
+          expiresAt: Date.now() + 900_000,
+        };
+      },
+    } as unknown as ConstructorParameters<typeof TokenCache>[0]["port"];
+    const tokenCache = new TokenCache({
+      port: slowPort,
+      microvmId: "m-1",
+      codeServerPort: 8080,
+      maxTokenMinutes: 15,
+      refreshMarginSeconds: 60,
+      now: () => Date.now(),
+      redactor,
+    });
+
+    const proxy = await startProxy({
+      endpoint: "unused.example",
+      codeServerPort: 8080,
+      listenPort: 0,
+      localAuth: false,
+      tokenCache,
+      logger: new RedactingLogger(redactor),
+      readState: async () => "RUNNING",
+      authHeadersFromToken,
+      // Point the upstream WS at the fake loopback ws:// server.
+      upstreamWsUrl: (_endpoint, reqUrl) => `ws://127.0.0.1:${upstreamPort}${reqUrl}`,
+    });
+    cleanup.push(() => proxy.stop());
+
+    // Open a browser-side socket to the proxy and send a frame immediately on
+    // open — well before the delayed token lets the upstream connect.
+    const browser = new WebSocket(`ws://127.0.0.1:${proxy.port}/ws`);
+    await new Promise<void>((resolve, reject) => {
+      browser.on("open", () => {
+        browser.send("sent-on-open");
+        resolve();
+      });
+      browser.on("error", reject);
+    });
+    // Send a second frame a bit later, still possibly before upstream open.
+    setTimeout(() => browser.send("sent-later"), 20);
+
+    // Wait until the upstream has received both frames (or time out).
+    const deadline = Date.now() + 3000;
+    while (received.length < 2 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    browser.close();
+    expect(received).toEqual(["sent-on-open", "sent-later"]);
   });
 });

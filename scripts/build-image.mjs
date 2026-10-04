@@ -60,25 +60,6 @@ const buildInputs = {
   clientToken: `csmvm-build-${Date.now()}`,
 };
 
-let imageVersion;
-try {
-  console.log(`Creating MicroVM image "${name}" from ${codeArtifactUri}`);
-  const created = await client.send(new CreateMicrovmImageCommand({ name, ...buildInputs }));
-  imageVersion = created.imageVersion;
-} catch (e) {
-  if (e.name === "ValidationException" && /already exists/.test(e.message ?? "")) {
-    console.log("image exists; creating a new version via UpdateMicrovmImage");
-    const updated = await client.send(
-      new UpdateMicrovmImageCommand({ imageIdentifier: imageArn, ...buildInputs }),
-    );
-    // Trust the version the service just created; only fall back to discovery
-    // if the response omits it.
-    imageVersion = updated.imageVersion;
-  } else {
-    throw e;
-  }
-}
-
 /** Compare two version strings like "4.0"/"10.0" numerically, descending. */
 function compareVersionsDesc(a, b) {
   const pa = String(a).split(".").map(Number);
@@ -90,8 +71,8 @@ function compareVersionsDesc(a, b) {
   return 0;
 }
 
-/** Discover the newest image version via the API (no hardcoded version list). */
-async function discoverNewestVersion() {
+/** List all image versions via the API (no hardcoded version list). */
+async function listVersions() {
   const versions = [];
   let nextToken;
   do {
@@ -103,35 +84,97 @@ async function discoverNewestVersion() {
     }
     nextToken = page.nextToken;
   } while (nextToken !== undefined && nextToken !== "");
-  if (versions.length === 0) return undefined;
   versions.sort(compareVersionsDesc);
-  return versions[0];
+  return versions;
 }
 
-// Find the newest build for the target version and poll it.
-async function newestBuild() {
-  // Prefer the version the create/update call returned; otherwise ask the API
-  // for the newest version rather than guessing from a fixed list.
-  const version = imageVersion ?? (await discoverNewestVersion());
-  if (version === undefined) return null;
-  const builds = await client.send(
-    new ListMicrovmImageBuildsCommand({ imageIdentifier: imageArn, imageVersion: version }),
-  );
-  const items = builds.items ?? [];
-  if (items.length === 0) return null;
-  // newest createdAt
-  items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  return { imageVersion: version, buildId: items[0].buildId };
+/** List every (version, buildId, createdAt) across the newest few versions. */
+async function listAllBuilds() {
+  const out = [];
+  // Only the newest handful of versions can plausibly hold the build we just
+  // triggered; scan a bounded window to keep this cheap.
+  const versions = (await listVersions()).slice(0, 5);
+  for (const version of versions) {
+    let nextToken;
+    do {
+      const page = await client.send(
+        new ListMicrovmImageBuildsCommand({
+          imageIdentifier: imageArn,
+          imageVersion: version,
+          nextToken,
+        }),
+      );
+      for (const b of page.items ?? []) {
+        if (b.buildId !== undefined) {
+          out.push({ version, buildId: b.buildId, createdAt: b.createdAt });
+        }
+      }
+      nextToken = page.nextToken;
+    } while (nextToken !== undefined && nextToken !== "");
+  }
+  return out;
 }
 
-// Give the service a moment to register the new build.
-await sleep(5000);
-const nb = await newestBuild();
+const BUILD_KEY = (b) => `${b.version}#${b.buildId}`;
+
+/**
+ * Find the build this run just triggered. We never trust "newest in the list":
+ * a freshly triggered build may not be visible yet, and the previous version's
+ * build is already SUCCESSFUL — picking it would report a false BUILD_OK.
+ * Instead we poll until a (version, buildId) pair appears that was NOT present
+ * before the create/update call, and return exactly that build.
+ */
+async function waitForNewBuild(priorKeys, hintVersion, hintBuildId) {
+  // Fast path: the create/update call told us the exact build.
+  if (hintVersion !== undefined && hintBuildId !== undefined) {
+    return { version: hintVersion, buildId: hintBuildId };
+  }
+  const findDeadline = Date.now() + 2 * 60 * 1000; // up to 2 min for it to appear
+  for (;;) {
+    const builds = await listAllBuilds();
+    const fresh = builds.filter((b) => !priorKeys.has(BUILD_KEY(b)));
+    if (fresh.length > 0) {
+      // If several appeared, take the newest by createdAt.
+      fresh.sort(
+        (a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime(),
+      );
+      return { version: fresh[0].version, buildId: fresh[0].buildId };
+    }
+    if (Date.now() > findDeadline) return null;
+    await sleep(5000);
+  }
+}
+
+// Snapshot existing builds BEFORE mutating, so we can identify the new one.
+const priorBuilds = await listAllBuilds();
+const priorKeys = new Set(priorBuilds.map(BUILD_KEY));
+
+let hintVersion;
+let hintBuildId;
+try {
+  console.log(`Creating MicroVM image "${name}" from ${codeArtifactUri}`);
+  const created = await client.send(new CreateMicrovmImageCommand({ name, ...buildInputs }));
+  hintVersion = created.imageVersion;
+  hintBuildId = created.buildId;
+} catch (e) {
+  if (e.name === "ValidationException" && /already exists/.test(e.message ?? "")) {
+    console.log("image exists; creating a new version via UpdateMicrovmImage");
+    const updated = await client.send(
+      new UpdateMicrovmImageCommand({ imageIdentifier: imageArn, ...buildInputs }),
+    );
+    hintVersion = updated.imageVersion;
+    hintBuildId = updated.buildId;
+  } else {
+    throw e;
+  }
+}
+
+const nb = await waitForNewBuild(priorKeys, hintVersion, hintBuildId);
 if (!nb) {
-  console.error("could not find a build to poll");
+  console.error("could not identify the newly triggered build to poll");
   process.exit(1);
 }
-console.log(`polling imageVersion=${nb.imageVersion} buildId=${nb.buildId}`);
+console.log(`polling imageVersion=${nb.version} buildId=${nb.buildId}`);
 
 const deadline = Date.now() + 20 * 60 * 1000;
 let last = "";
@@ -139,7 +182,7 @@ for (;;) {
   const b = await client.send(
     new GetMicrovmImageBuildCommand({
       imageIdentifier: imageArn,
-      imageVersion: nb.imageVersion,
+      imageVersion: nb.version,
       buildId: nb.buildId,
     }),
   );
@@ -150,7 +193,7 @@ for (;;) {
   if (
     ["SUCCESSFUL", "CREATED", "AVAILABLE", "ACTIVE", "COMPLETED", "COMPLETE"].includes(b.buildState)
   ) {
-    console.log(`BUILD_OK imageArn=${imageArn} imageVersion=${nb.imageVersion}`);
+    console.log(`BUILD_OK imageArn=${imageArn} imageVersion=${nb.version} buildId=${nb.buildId}`);
     process.exit(0);
   }
   if (/FAIL/i.test(b.buildState ?? "")) {

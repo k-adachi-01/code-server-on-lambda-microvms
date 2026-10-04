@@ -54,7 +54,6 @@ export interface AuthDecision {
 export class LocalAuth {
   private secret: string | null;
   private readonly cookieValue: string;
-  readonly loginUrl: string;
 
   constructor(
     private readonly listenPort: number | (() => number),
@@ -62,7 +61,14 @@ export class LocalAuth {
   ) {
     this.secret = enabled ? token256() : null;
     this.cookieValue = token256();
-    this.loginUrl = `http://127.0.0.1:${this.port()}${LOGIN_PATH}?k=${this.secret ?? ""}`;
+  }
+
+  /**
+   * The one-time login URL. Computed lazily so it reflects the actual bound
+   * port when the proxy listens on port 0 (the port is resolved after bind).
+   */
+  get loginUrl(): string {
+    return `http://127.0.0.1:${this.port()}${LOGIN_PATH}?k=${this.secret ?? ""}`;
   }
 
   /** The current listen port (may be resolved lazily when bound to port 0). */

@@ -78,6 +78,23 @@ export function authValueFromHeaders(headers: Record<string, string>): string {
   );
 }
 
+/**
+ * Whether a request carries a body that was streamed upstream (and therefore
+ * cannot be replayed on a retry). Decided from the headers, not the method: a
+ * bodyless DELETE/POST has no `content-length` > 0 and no `transfer-encoding`,
+ * so it is safe to retry; a chunked or non-zero-length request is not.
+ */
+export function requestHasBody(req: {
+  headers: Record<string, string | string[] | undefined>;
+}): boolean {
+  if (req.headers["transfer-encoding"] !== undefined) return true;
+  const raw = req.headers["content-length"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (value === undefined) return false;
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n > 0;
+}
+
 export interface RunningProxy {
   loginUrl: string;
   /** The actual loopback port the proxy bound to (useful when listenPort is 0). */
@@ -150,15 +167,14 @@ export function startProxy(deps: ProxyServerDeps): Promise<RunningProxy> {
 
     // Forward to the upstream MicroVM endpoint over HTTPS. On an upstream
     // 401/403 we force one token refresh and retry once; a second failure
-    // becomes a 502 (R4.8). The retry is only safe for requests without a body
-    // (the request stream can be piped only once).
-    const method = (req.method ?? "GET").toUpperCase();
-    const hasBody = method !== "GET" && method !== "HEAD" && req.headers["content-length"] !== "0";
+    // becomes a 502 (R4.8). The retry is only safe when the request carried no
+    // body (the request stream can be piped only once) — this depends on the
+    // actual headers, not the method, so a bodyless DELETE is still retried.
     const firstToken = (await deps.tokenCache.get()).token;
     const first = await forward(req, res, firstToken);
     if (first === "auth-failed") {
-      if (hasBody) {
-        // The request body stream is already consumed; we cannot safely retry.
+      if (requestHasBody(req)) {
+        // A request body stream is already consumed; we cannot safely retry.
         if (!res.headersSent) {
           res.writeHead(502, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "bad_gateway" }));
@@ -244,15 +260,43 @@ export function startProxy(deps: ProxyServerDeps): Promise<RunningProxy> {
 
   async function relayWebSocket(browserWs: WebSocket, reqUrl: string): Promise<void> {
     openSockets.add(browserWs);
+    browserWs.on("close", () => openSockets.delete(browserWs));
+
+    // The browser handshake has already completed, so the browser may send
+    // frames before the upstream socket is open (the token fetch + connect are
+    // async). Buffer those frames from the very first tick and flush them in
+    // order once upstream opens, so no early frame is lost (e.g. the workbench
+    // or terminal handshake). While buffering, record close/error intent too.
+    const pending: { data: WebSocket.RawData; isBinary: boolean }[] = [];
+    let upstreamWs: WebSocket | null = null;
+    let browserClosed = false;
+    const onEarlyMessage = (data: WebSocket.RawData, isBinary: boolean): void => {
+      if (upstreamWs !== null && upstreamWs.readyState === WebSocket.OPEN) {
+        upstreamWs.send(data, { binary: isBinary });
+      } else {
+        pending.push({ data, isBinary });
+      }
+    };
+    browserWs.on("message", onEarlyMessage);
+    browserWs.on("close", () => {
+      browserClosed = true;
+      if (upstreamWs !== null) upstreamWs.close();
+    });
+
     try {
       const { token } = await deps.tokenCache.get();
       const authValue = authValueFromHeaders(deps.authHeadersFromToken(token));
       // Preserve the browser's path + query; only swap scheme/host for upstream.
-      const upstreamWs = new WebSocket(
+      upstreamWs = new WebSocket(
         buildWsUrl(deps.endpoint, reqUrl),
         wsSubprotocols(authValue, deps.codeServerPort),
       );
-      const pump = (from: WebSocket, to: WebSocket): void => {
+      // The browser may already have gone away during the async connect.
+      if (browserClosed) {
+        upstreamWs.close();
+        return;
+      }
+      const relayMessage = (from: WebSocket, to: WebSocket): void => {
         from.on(
           "message",
           (data, isBinary) =>
@@ -262,14 +306,19 @@ export function startProxy(deps: ProxyServerDeps): Promise<RunningProxy> {
         from.on("error", () => to.close());
       };
       upstreamWs.on("open", () => {
-        pump(browserWs, upstreamWs);
-        pump(upstreamWs, browserWs);
+        const up = upstreamWs as WebSocket;
+        // Stop buffering: switch the browser->upstream path to direct relay and
+        // flush anything that arrived before upstream was ready, in order.
+        browserWs.off("message", onEarlyMessage);
+        for (const frame of pending.splice(0)) {
+          up.send(frame.data, { binary: frame.isBinary });
+        }
+        relayMessage(browserWs, up);
+        relayMessage(up, browserWs);
       });
       upstreamWs.on("error", () => browserWs.close());
     } catch {
       browserWs.close();
-    } finally {
-      browserWs.on("close", () => openSockets.delete(browserWs));
     }
   }
 

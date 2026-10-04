@@ -14,6 +14,7 @@
     "test": "vp test",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
+    "csmvm": "node dist/cli/main.js",
     "hygiene": "node scripts/hygiene.mjs --full",
     "hygiene:staged": "node scripts/hygiene.mjs --staged",
     "infra:diff": "pnpm -C infra exec cdk diff",
