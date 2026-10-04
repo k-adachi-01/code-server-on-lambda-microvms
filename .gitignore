@@ -16,6 +16,9 @@ cdk.out/
 # Local CLI config (holds region + Image ARN; the example is tracked instead)
 csmvm.config.json
 
+# Local demo recordings / assets (kept out of the public repo intentionally)
+demo/
+
 # Repo-hygiene local profile-name denylist (holds personal AWS profile names;
 # never committed — the committed hygiene check ships an EMPTY denylist)
 .hygiene-profiles.local
