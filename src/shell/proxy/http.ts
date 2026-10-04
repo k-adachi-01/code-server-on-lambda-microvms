@@ -27,6 +27,9 @@ export function upstreamRequestHeaders(
   for (const [name, value] of Object.entries(incoming)) {
     const lower = name.toLowerCase();
     if (HOP_BY_HOP.has(lower)) continue;
+    // Let the HTTP client use the MicroVM endpoint as Host. Forwarding the
+    // browser's localhost Host makes the AWS ingress reject valid auth (403).
+    if (lower === "host") continue;
     if (lower === "cookie") continue; // replaced below with the stripped form
     if (value === undefined) continue;
     out[name] = Array.isArray(value) ? value.join(", ") : value;

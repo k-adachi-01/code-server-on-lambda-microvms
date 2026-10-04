@@ -166,6 +166,8 @@ describe("proxy server (integration)", () => {
     // The upstream saw the injected auth header and the target port.
     expect(upstream.lastHeaders["x-aws-proxy-auth"]).toBeDefined();
     expect(upstream.lastHeaders["x-aws-proxy-port"]).toBe("8080");
+    // Host must address the upstream, not the browser-facing local proxy.
+    expect(upstream.lastHeaders["host"]).toBe(`127.0.0.1:${upstream.port}`);
   });
 
   it("gates on state: non-RUNNING returns 503 with the state and never calls upstream", async () => {
